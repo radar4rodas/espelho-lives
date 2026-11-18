@@ -1,0 +1,17 @@
+# Dados pessoais: NUNCA enviar (sessionid do TikTok, usuário, configurações)
+config.json
+perfil_navegador_shopee/
+
+# Gravações e registros das lives
+gravacoes/
+*.log
+*.ts
+*.flv
+*.mp4
+
+# Modelo de voz (baixar à parte, veja o LEIA-ME)
+modelos/
+
+# Python
+__pycache__/
+*.pyc
