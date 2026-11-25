@@ -8,7 +8,8 @@ Dois lados, que podem rodar ao mesmo tempo:
     python painel.py                 abre http://127.0.0.1:8765 no navegador
     python painel.py --sem-navegador só sobe o servidor
 
-Só aceita conexões deste computador (127.0.0.1).
+Só aceita conexões deste computador (127.0.0.1). A página do celular (celular.py, porta 8770) é separada
+e só aceita aparelhos da rede de casa.
 """
 
 import json
@@ -23,12 +24,14 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import contador
 import espelho
 from extensao import PASTA_EXTENSAO, ponte
 import obs_tiktok
 import transmissao
 
 PAGINA = espelho.BASE / "painel.html"
+PAGINA_CONTADOR = espelho.BASE / "contador.html"   # o OBS mostra esta página por cima do vídeo do TikTok
 LADOS = ("ts", "st")
 NOME_LADO = {"ts": "TikTok → Shopee", "st": "Shopee → TikTok"}
 _obs_cache = {"quando": 0.0, "valor": None}
@@ -56,6 +59,15 @@ def estado_obs():
     _obs_cache.update(quando=time.time(), valor=valor)
     return valor
 
+
+def _ajuste_voz(valor, padrao):
+    """Shopee -> TikTok: ms que a imagem é atrasada para casar com a voz (0 a 2000)."""
+    for v in (valor, padrao, transmissao.AJUSTE_VOZ_PADRAO):
+        try:
+            return max(0, min(2000, int(float(v))))
+        except (TypeError, ValueError):
+            continue
+    return 0
 
 def _atraso(valor, padrao):
     return min(30.0, max(0.0, float(padrao if valor in (None, "") else valor)))
@@ -91,6 +103,7 @@ class Lado:
         self.tipo_ativo = None
         self.alarme = False
         self.alarme_tipo = ""
+        self.alarme_detalhe = ""
         self.pausa = False
         self.preview = Path(tempfile.gettempdir()) / f"espelho_preview_{sentido}.jpg"
 
@@ -115,6 +128,7 @@ class Lado:
             "tipo_ativo": self.tipo_ativo if rodando else None,
             "alarme": self.alarme,
             "alarme_tipo": self.alarme_tipo,
+            "alarme_detalhe": self.alarme_detalhe,
             "pausa": self.pausa if rodando else False,
         }
 
@@ -127,6 +141,8 @@ class Painel:
         self.lados = {s: Lado(s) for s in LADOS}
         self.logs = deque(maxlen=500)
         self.prox_id = 1
+        self._avisos_vistos = {}          # (site, texto) -> quando: o mesmo aviso não dispara duas vezes
+        self._lock_restricao = {"tiktok": threading.Lock(), "shopee": threading.Lock()}   # uma por plataforma
 
     # chamado pelo logging
     def add_log(self, nivel, texto, lado=""):
@@ -155,7 +171,8 @@ class Painel:
                 lado.ultimos_mudos.appendleft({"hora": time.strftime("%H:%M:%S"), "palavra": msg.split("|")[0]})
                 return
             if estado == "alarme":
-                lado.alarme, lado.alarme_tipo = True, msg
+                tipo, _, detalhe = msg.partition("|")
+                lado.alarme, lado.alarme_tipo, lado.alarme_detalhe = True, tipo, detalhe
             else:
                 lado.estado, lado.mensagem = estado, msg
                 if estado in ("ao_vivo", "reprise"):
@@ -250,6 +267,7 @@ class Painel:
         except (TypeError, ValueError):
             return "FPS e intervalo precisam ser números."
         cfg["shopee_url_servidor"] = url
+        cfg["contador_lado"] = "ts"     # o contador "Oferta termina em" deste lado vai no vídeo da Shopee
         if reprise:
             cfg["repetir_reprise"] = bool(d.get("repetir", True))
             cfg["horas_reprise"], cfg["encerrar_fim_reprise"] = _tempo_loop(d)
@@ -275,10 +293,12 @@ class Painel:
             esp = espelho.Reprisador(cfg, ffmpeg, destino, arquivo, repetir=cfg["repetir_reprise"],
                                      limite_seg=cfg["horas_reprise"] * 3600,
                                      ao_acabar_tempo=ponte.encerrar if cfg["encerrar_fim_reprise"] else None,
+                                     estado_destino=lambda: ponte.status,
                                      aviso=aviso, preview=str(lado.preview))
         else:
             esp = espelho.Espelhador(cfg, ffmpeg, destino, aviso=aviso, preview=str(lado.preview),
-                                     ao_encerrar_tiktok=ponte.encerrar if cfg["encerrar_shopee"] else None)
+                                     ao_encerrar_tiktok=ponte.encerrar if cfg["encerrar_shopee"] else None,
+                                     estado_destino=lambda: ponte.status)
             if cfg["encerrar_shopee"]:
                 _log_lado("ts", logging.INFO, "Finalização automática ligada: quando a live acabar no TikTok, "
                                               "clico em 'Finalizar Transmissão' na Shopee.")
@@ -297,6 +317,11 @@ class Painel:
         except (TypeError, ValueError):
             return None, "O atraso precisa ser um número de segundos."
         cfg["mutar_st"] = bool(d.get("mutar_palavras", cfg.get("mutar_st", True)))
+        if d.get("ajuste_voz") == "auto":
+            cfg["sincronia_auto"] = True
+        elif d.get("ajuste_voz") not in (None, ""):
+            cfg["sincronia_auto"] = False
+            cfg["ajuste_voz_ms"] = _ajuste_voz(d.get("ajuste_voz"), cfg.get("ajuste_voz_ms"))
         if cfg["mutar_st"] and not transmissao.carregar_modelo():
             return None, ("O mudo automático precisa do reconhecimento de voz, que não está instalado. "
                           "Desmarque 'Mutar' ou reinstale (veja o LEIA-ME).")
@@ -365,6 +390,88 @@ class Painel:
                     lado.estado, lado.mensagem = "parado", "Transmissão encerrada."
                 lado.stats, lado.ao_vivo_desde = "", None
             lado.apagar_preview()
+            # a live acabou: emenda as partes da gravação num vídeo só (em segundo plano)
+            threading.Thread(target=esp.juntar_gravacoes, daemon=True, name="juntar-gravacao").start()
+
+    def ajustar_voz(self, ms):
+        """Salva a sincronia da voz (Shopee -> TikTok) e, se o lado estiver no ar, aplica sem parar.
+        ms=None: automático."""
+        cfg = espelho.ler_config()
+        cfg["sincronia_auto"] = ms is None
+        if ms is not None:
+            cfg["ajuste_voz_ms"] = ms
+        try:
+            espelho.salvar_config(cfg)
+        except OSError:
+            pass
+        with self.lock:
+            esp = self.lados["st"].esp
+        if esp is not None and hasattr(esp, "ajustar_voz"):
+            esp.ajustar_voz(ms)
+        else:
+            if ms is None:
+                _log_lado("st", logging.INFO, "🎚 Sincronia da voz automática (vale ao iniciar).")
+            else:
+                _log_lado("st", logging.INFO, "🎚 Sincronia da voz: imagem atrasada em %d ms (vale ao iniciar).", ms)
+        return {"ok": True, "ms": ms}
+
+    def aviso_restricao(self, site, texto):
+        """A extensão leu um aviso de restrição: encerra a live SÓ na plataforma onde o aviso apareceu
+        (aviso na Shopee -> encerra a Shopee; aviso no TikTok -> encerra o TikTok). A outra continua."""
+        site = "tiktok" if site == "tiktok" else "shopee"
+        nome = "no TikTok" if site == "tiktok" else "na Shopee"
+        texto = " ".join(texto.split())[:400]
+        agora = time.time()
+        with self.lock:
+            if agora - self._avisos_vistos.get((site, texto), 0) < 600:
+                return
+            self._avisos_vistos[(site, texto)] = agora
+        espelho.log.warning("⛔ AVISO DE RESTRIÇÃO %s: «%s»", nome.upper(), texto)
+        # o lado que envia PARA a plataforma do aviso: "st" manda para o TikTok, "ts" manda para a Shopee
+        alvo = self.lados["st" if site == "tiktok" else "ts"]
+        if not espelho.ler_config().get("encerrar_restricao", True):
+            espelho.log.warning("A proteção contra restrição está desligada: não encerrei nada. Confira a live %s agora.",
+                                nome)
+            self._aviso(alvo, "alarme", f"restricao_desligada|{nome}: {texto}")
+            return
+        trava = self._lock_restricao[site]
+        if not trava.acquire(blocking=False):
+            return                                  # já estou encerrando esta plataforma por outro aviso
+        try:
+            self._encerrar_plataforma(site, nome, texto, alvo)
+        finally:
+            trava.release()
+
+    def _encerrar_plataforma(self, site, nome, texto, alvo):
+        plataforma, sentido = ("TikTok", "st") if site == "tiktok" else ("Shopee", "ts")
+        # 1) para de enviar para esta plataforma (antes de encerrar, para o motor não reagir ao fim)
+        with self.lock:
+            esp = self.lados[sentido].esp
+        if esp:
+            _log_lado(sentido, logging.WARNING, "⛔ Parando o envio %s por causa do aviso de restrição.", nome)
+            try:
+                esp.parar()
+            except Exception as e:
+                espelho.log.debug("parar: %s", e)
+        # 2) encerra a live só nesta plataforma (a outra continua no ar)
+        no_ar = (ponte.status_tiktok if site == "tiktok" else ponte.status).get("situacao") == "ao_vivo"
+        if not no_ar and not esp:
+            espelho.log.warning("A live %s não estava no ar; não havia o que encerrar.", nome)
+            self._aviso(alvo, "alarme", f"restricao|{nome}: {texto}")
+            return
+        try:
+            r = (ponte.tiktok_encerrar if site == "tiktok" else ponte.encerrar)()
+        except Exception as e:
+            r = {"ok": False, "detalhe": str(e)}
+        r = r or {"ok": False, "detalhe": "sem resposta da extensão"}
+        if r.get("ok"):
+            espelho.log.warning("⛔ %s: live encerrada por causa do aviso de restrição. A outra plataforma continua.",
+                                plataforma)
+            self._aviso(alvo, "alarme", f"restricao|{nome}: {texto}")
+        else:
+            espelho.log.warning("⚠ %s: NÃO consegui encerrar (%s). ENCERRE AGORA na aba do Chrome.",
+                                plataforma, r.get("detalhe") or r.get("erro") or "sem detalhe")
+            self._aviso(alvo, "alarme", f"restricao_falhou|{nome}: {texto}||{plataforma}")
 
     def parar(self, sentido=None):
         """Para um lado (ou os dois, se sentido for None)."""
@@ -406,6 +513,7 @@ class Painel:
             "shopee": ponte.status,
             "tiktok": ponte.status_tiktok,
             "obs": estado_obs(),
+            "contador": contador.resumo(),
             "config": {
                 "encerrar_shopee": bool(cfg.get("encerrar_shopee")),
                 "gravar": bool(cfg.get("gravar")),
@@ -419,6 +527,8 @@ class Painel:
                 "mutar_palavras": cfg.get("mutar_palavras", True),
                 "atraso_st": cfg.get("atraso_st", cfg.get("atraso_seg", 7)),
                 "mutar_st": cfg.get("mutar_st", True),
+                "ajuste_voz_ms": _ajuste_voz(None, cfg.get("ajuste_voz_ms")),
+                "sincronia_auto": bool(cfg.get("sincronia_auto", True)),
                 "usuario": cfg.get("tiktok_usuario", ""),
                 # nunca devolve o valor do sessionid para a página, só se existe um salvo
                 "sessionid_salvo": bool(cfg.get("lembrar_sessionid") and cfg.get("tiktok_sessionid")),
@@ -426,6 +536,7 @@ class Painel:
                 "shopee_link": cfg.get("shopee_link_live", ""),
                 "gravar_st": bool(cfg.get("gravar_st")),
                 "auto_tiktok": bool(cfg.get("auto_tiktok")),
+                "encerrar_restricao": bool(cfg.get("encerrar_restricao", True)),
                 "qualidade": qual,
                 "modo": cfg.get("modo"),
                 "fps": cfg.get("fps"),
@@ -523,6 +634,10 @@ def criar_handler(painel, porta):
                 except ValueError:
                     desde = 0
                 self._json(painel.resumo(desde))
+            elif caminho == "/contador.html":
+                self._enviar(200, PAGINA_CONTADOR.read_bytes(), "text/html; charset=utf-8")
+            elif caminho == "/api/contador":
+                self._json({**contador.resumo(), "agora": time.time()})
             elif caminho == "/api/gravacoes":
                 sentido = "st" if params.get("pasta") == "st" else "ts"
                 self._json({"pasta": str(espelho.pasta_gravacao(sentido)),
@@ -554,6 +669,9 @@ def criar_handler(painel, porta):
             elif self.path == "/api/parar":
                 painel.parar(_sentido(dados))
                 self._json({"ok": True})
+            elif self.path == "/api/contador":
+                r = contador.acao(dados, "pelo computador")
+                self._json(r, 200 if r["ok"] else 400)
             elif self.path == "/api/shopee/pasta_extensao":
                 try:
                     os.startfile(str(PASTA_EXTENSAO))     # abre a pasta da extensão no Explorador
@@ -573,6 +691,22 @@ def criar_handler(painel, porta):
                 _log_lado("ts", logging.INFO if r.get("ok") else logging.WARNING,
                           "Shopee: %s", r.get("detalhe") or r.get("erro"))
                 self._json(r)
+            elif self.path == "/api/tiktok/sincronia":
+                valor = dados.get("ms") if isinstance(dados, dict) else None
+                ms = None if valor == "auto" else _ajuste_voz(valor, None)
+                self._json(painel.ajustar_voz(ms))
+            elif self.path == "/api/protecao":
+                ligado = bool(dados.get("ligado")) if isinstance(dados, dict) else True
+                cfg = espelho.ler_config()
+                cfg["encerrar_restricao"] = ligado
+                try:
+                    espelho.salvar_config(cfg)
+                except OSError:
+                    pass
+                espelho.log.info("🛡 Proteção contra restrição %s.", "ligada: se aparecer um aviso de restrição na "
+                                 "Shopee ou no TikTok, encerro só a live daquela plataforma"
+                                 if ligado else "DESLIGADA")
+                self._json({"ok": True, "ligado": ligado})
             elif self.path == "/api/obs/abrir":
                 erro = obs_tiktok.garantir(espelho.log)
                 _obs_cache["quando"] = 0.0
@@ -583,12 +717,21 @@ def criar_handler(painel, porta):
             elif self.path == "/api/tiktok/diagnostico":
                 r = ponte.tiktok_diagnostico()
                 if r.get("botoes") is not None:
-                    _log_lado("st", logging.INFO, "TikTok: %s · contador: %s · botão ⏻ de encerrar: %s. Botões visíveis: %s",
+                    _log_lado("st", logging.INFO, "TikTok: %s · contador: %s · botão ⏻ de encerrar: %s · vigia de avisos "
+                              "de restrição: %s. Botões visíveis: %s",
                               "AO VIVO" if r.get("situacao") == "ao_vivo" else r.get("situacao", "?"),
                               r.get("contador") or "não visto", "achei" if r.get("encerrar") else "não achei",
+                              "ativo" if r.get("avisos") else "INATIVO (atualize a extensão e aperte F5)",
                               " | ".join(r["botoes"]) or "nenhum")
                 else:
                     _log_lado("st", logging.WARNING, "TikTok: %s", r.get("detalhe") or r.get("erro"))
+                self._json(r)
+            elif self.path in ("/api/tiktok/pausar", "/api/tiktok/retomar"):
+                # teste manual (use numa live de Prática): pausa/retoma a live no TikTok pela extensão
+                pausar = self.path.endswith("pausar")
+                r = ponte.tiktok_pausar() if pausar else ponte.tiktok_retomar()
+                _log_lado("st", logging.INFO if r.get("ok") else logging.WARNING, "🧪 Teste de %s no TikTok: %s",
+                          "pausa" if pausar else "retomada", r.get("detalhe") or r.get("erro") or "sem resposta")
                 self._json(r)
             elif self.path == "/api/abrir_pasta":
                 pasta = espelho.pasta_gravacao("st" if isinstance(dados, dict) and dados.get("pasta") == "st" else "ts")
@@ -604,7 +747,25 @@ def criar_handler(painel, porta):
     return Handler
 
 
+def desligar_selecao_no_console():
+    """Desliga a "Edição Rápida" da janela preta. Com ela ligada, um clique dentro da janela entra em modo de
+    seleção e o Windows PAUSA o painel (as mensagens param de sair e a reprise trava no OBS)."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        entrada = k32.GetStdHandle(-10)             # STD_INPUT_HANDLE
+        modo = ctypes.c_uint32()
+        if k32.GetConsoleMode(entrada, ctypes.byref(modo)):
+            # tira ENABLE_QUICK_EDIT_MODE (0x40); ENABLE_EXTENDED_FLAGS (0x80) é obrigatório para valer
+            k32.SetConsoleMode(entrada, (modo.value & ~0x40) | 0x80)
+    except Exception:
+        pass
+
+
 def main():
+    desligar_selecao_no_console()
     espelho.configurar_log(tela=True)
     painel = Painel()
     espelho.log.addHandler(_ParaPainel(painel))
@@ -629,9 +790,14 @@ def main():
             espelho.log.info("📁 %d gravação(ões) antiga(s) movida(s) para gravacoes\\TikTok para Shopee.", movidos)
     except OSError as e:
         espelho.log.warning("Não consegui organizar as pastas de gravação: %s", e)
+    ponte.ao_aviso = painel.aviso_restricao   # aviso de restrição -> encerra a live só naquela plataforma
     ponte.iniciar()   # conexão com a extensão do Chrome (Shopee e TikTok)
+    import celular
+    no_celular = celular.iniciar(painel, cfg, estado_obs=estado_obs)   # página para o celular, só no Wi-Fi de casa
     print("=" * 60)
     print(f"  Painel do Espelho rodando em  {endereco}")
+    if no_celular:
+        print(f"  No celular (mesmo Wi-Fi):     {no_celular}")
     print("  NÃO feche esta janela enquanto estiver transmitindo.")
     print("  Fechar esta janela encerra o painel e as transmissões.")
     print("=" * 60)

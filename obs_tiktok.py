@@ -25,6 +25,7 @@ DESTINO_OBS = f"srt://127.0.0.1:{PORTA_OBS}?mode=caller&latency=120000&pkt_size=
 NOME = "EspelhoTikTok"
 FONTE = "Video da live"   # nome da fonte; precisa ser diferente do nome da cena ("Live")
 FONTE_IMAGEM = "Ja voltamos"
+FONTE_CONTADOR = "Contador"   # página do painel com o contador "Oferta termina em", por cima do vídeo
 IMAGEM_PAUSA = Path(__file__).resolve().parent / "imagens" / "ja_voltamos.png"
 PASTA_CFG = Path(os.environ.get("APPDATA", "")) / "obs-studio"
 PASTA_OBS = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "obs-studio" / "bin" / "64bit"
@@ -93,8 +94,17 @@ def _item(nome, id_fonte, num):
             "crop_left": 0, "crop_top": 0, "crop_right": 0, "crop_bottom": 0}
 
 
+def _porta_painel():
+    try:
+        cfg = json.loads((Path(__file__).resolve().parent / "config.json").read_text(encoding="utf-8"))
+        return int(cfg.get("porta_painel", 8765))
+    except (OSError, ValueError, TypeError):
+        return 8765
+
+
 def _colecao():
     id_fonte, id_cena, id_img = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    id_cont = str(uuid.uuid4())
     fonte = {
         "id": "ffmpeg_source", "versioned_id": "ffmpeg_source", "name": FONTE, "uuid": id_fonte,
         "enabled": True, "muted": False, "volume": 1.0, "balance": 0.5, "mixers": 255,
@@ -119,9 +129,18 @@ def _colecao():
                        "uuid": id_img, "enabled": True, "settings": {"file": str(IMAGEM_PAUSA)}})
         itens.append(_item(FONTE_IMAGEM, id_img, 2))
     itens.append(_item(FONTE, id_fonte, 1))
+    # O contador fica POR CIMA do vídeo: uma página transparente do painel, do tamanho da tela.
+    # Sem contador ligado ela não mostra nada; com o painel fechado também não.
+    fontes.append({"id": "browser_source", "versioned_id": "browser_source", "name": FONTE_CONTADOR,
+                   "uuid": id_cont, "enabled": True, "muted": True,
+                   "settings": {"url": f"http://127.0.0.1:{_porta_painel()}/contador.html?lado=st",
+                                "width": LARGURA, "height": ALTURA, "fps_custom": False,
+                                "css": "body { background-color: rgba(0, 0, 0, 0); margin: 0px auto; overflow: hidden; }",
+                                "shutdown": False, "restart_when_active": False, "reroute_audio": False}})
+    itens.append(_item(FONTE_CONTADOR, id_cont, 3))
     cena = {
         "id": "scene", "versioned_id": "scene", "name": "Live", "uuid": id_cena, "enabled": True,
-        "settings": {"id_counter": 2, "custom_size": False, "items": itens},
+        "settings": {"id_counter": 3, "custom_size": False, "items": itens},
     }
     return {
         "name": NOME, "current_scene": "Live", "current_program_scene": "Live",
@@ -172,9 +191,10 @@ _avisou_cena = []
 
 
 def cena_atualizada():
-    """A cena salva do OBS já tem a imagem de pausa? (o OBS regrava a cena ao fechar)"""
+    """A cena salva do OBS já tem a imagem de pausa e o contador? (o OBS regrava a cena ao fechar)"""
     try:
-        return FONTE_IMAGEM in (PASTA_CFG / "basic" / "scenes" / f"{NOME}.json").read_text(encoding="utf-8")
+        texto = (PASTA_CFG / "basic" / "scenes" / f"{NOME}.json").read_text(encoding="utf-8")
+        return FONTE_IMAGEM in texto and "contador.html" in texto
     except OSError:
         return False
 
@@ -205,8 +225,8 @@ def garantir(log=None, espera=40):
         abrir()
     elif log and not _avisou_cena and not cena_atualizada():
         _avisou_cena.append(True)
-        log.warning("O OBS foi aberto com a cena antiga (sem a imagem 'Já voltamos' da pausa). Na próxima vez, "
-                    "feche o OBS antes de clicar em Iniciar, para o painel reabrir com a cena nova.")
+        log.warning("O OBS foi aberto com a cena antiga (sem o contador na tela ou sem a imagem 'Já voltamos'). "
+                    "Na próxima vez, feche o OBS antes de clicar em Iniciar, para o painel reabrir com a cena nova.")
     fim = time.time() + espera
     while time.time() < fim:
         if obs_escutando():

@@ -1,0 +1,899 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0c10">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Lives no celular</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23ee4d2d'/%3E%3Ccircle cx='32' cy='32' r='12' fill='white'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #0b0c10; --card: #14161c; --card-2: #0f1116; --line: #262a35; --text: #f2f3f5; --muted: #9aa0ad;
+    --ok: #2fd27a; --ok-soft: rgba(47, 210, 122, .14); --warn: #ffb020;
+    --bad: #ff4d5e; --bad-soft: rgba(255, 77, 94, .16); --blue: #4da3ff;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { padding: max(14px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom)); }
+  [hidden] { display: none !important; }
+  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  h1 { font-size: 20px; margin: 0; }
+  .conexao { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
+  .conexao .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  .conexao.on .dot { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .conexao.off .dot { background: var(--bad); }
+
+  .alarme { display: none; background: var(--bad-soft); border: 1px solid var(--bad); border-radius: 14px;
+    padding: 14px; margin-bottom: 14px; }
+  .alarme.on { display: block; animation: piscar 1.2s infinite; }
+  .alarme b { display: block; font-size: 15.5px; margin-bottom: 6px; }
+  .alarme p { margin: 0 0 10px; color: #ffd5d9; font-size: 13.5px; overflow-wrap: anywhere; }
+  @keyframes piscar { 50% { border-color: transparent; } }
+
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px; margin-bottom: 14px; }
+  .topo { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+  .topo h2 { margin: 0; font-size: 17px; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 800; letter-spacing: .03em;
+    padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+  .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .pill.no_ar { background: var(--ok-soft); color: var(--ok); border-color: rgba(47, 210, 122, .4); }
+  .pill.no_ar .dot { animation: pulsar 1.2s infinite; }
+  .pill.pausada { color: var(--warn); border-color: rgba(255, 176, 32, .4); }
+  @keyframes pulsar { 50% { opacity: .3; } }
+
+  /* pessoas online: o número principal da tela */
+  .online { display: flex; align-items: baseline; gap: 10px; background: var(--card-2); border-radius: 14px;
+    padding: 12px 14px; margin-bottom: 8px; }
+  .online span { font-size: 40px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+  .online small { color: var(--muted); font-size: 13px; }
+  .online em { margin-left: auto; font-style: normal; font-weight: 800; font-size: 14px; }
+  .online em.sobe { color: var(--ok); } .online em.desce { color: var(--bad); }
+  .extras { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px; }
+  .extras div { background: var(--card-2); border-radius: 12px; padding: 8px 10px; }
+  .extras b { display: block; font-size: 16px; font-variant-numeric: tabular-nums; }
+  .extras small { color: var(--muted); font-size: 11.5px; }
+  .titulo-live { font-weight: 600; font-size: 13.5px; margin: 0 0 8px; overflow-wrap: anywhere; }
+  .texto { color: var(--muted); font-size: 13px; margin: 0 0 8px; }
+  .ultima { color: var(--blue); font-size: 13px; margin: 0 0 8px; }
+  .envio { font-size: 13px; margin: 0 0 10px; padding: 8px 10px; border-radius: 10px; background: var(--card-2); color: var(--muted); }
+  .envio b { color: var(--text); }
+  .previa { display: none; width: 100%; max-height: 240px; object-fit: contain; border-radius: 12px;
+    background: #000; margin-bottom: 10px; }
+  .previa.on { display: block; }
+
+  button { font: inherit; font-weight: 800; font-size: 16px; border: 0; border-radius: 14px; padding: 16px 10px;
+    min-height: 56px; width: 100%; color: #fff; cursor: pointer; touch-action: manipulation; }
+  button:active { transform: scale(.98); }
+  button:disabled { opacity: .45; }
+  .b-encerrar { background: var(--bad); }
+  .b-tudo { background: linear-gradient(90deg, #c4162a, var(--bad)); font-size: 17px; min-height: 62px; }
+  .b-ok { background: #fff; color: #000; padding: 10px 18px; min-height: 0; font-size: 14px; width: auto; }
+
+  details { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 12px 14px; margin-top: 14px; }
+  summary { font-weight: 700; cursor: pointer; }
+  .notif { font-size: 14px; color: var(--text); }
+  .notif ol { padding-left: 20px; margin: 8px 0 12px; display: grid; gap: 4px; }
+  .rotulo-canal { display: block; color: var(--muted); font-size: 12.5px; margin-bottom: 4px; }
+  .canal { display: flex; gap: 8px; }
+  .canal input { flex: 1; min-width: 0; font: inherit; font-size: 16px; font-family: ui-monospace, Menlo, monospace;
+    color: var(--text); background: #0b0d12; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+  .canal button { width: auto; min-height: 0; padding: 0 14px; font-size: 14px; background: var(--card-2); border-radius: 12px; }
+  .b-testar { margin-top: 10px; background: var(--blue); min-height: 48px; font-size: 15px; }
+  .notif-info { color: var(--muted); font-size: 12.5px; margin: 8px 0 0; }
+  #log { margin-top: 10px; font: 12px/1.45 ui-monospace, Consolas, monospace; color: var(--muted); max-height: 320px; overflow: auto; }
+  #log div { padding: 3px 0; border-bottom: 1px solid #1b1e26; overflow-wrap: anywhere; }
+  #log .WARNING { color: var(--warn); } #log .ERROR { color: var(--bad); }
+
+  .aviso-toast { position: fixed; left: 16px; right: 16px; bottom: max(16px, env(safe-area-inset-bottom));
+    padding: 14px; border-radius: 14px; font-weight: 700; background: #20242e; border: 1px solid var(--line);
+    transform: translateY(150%); transition: transform .25s; z-index: 9; }
+  .aviso-toast.on { transform: none; }
+  .aviso-toast.ok { border-color: var(--ok); } .aviso-toast.erro { border-color: var(--bad); }
+  .avisos .topo { margin-bottom: 8px; }
+  .b-som { width: auto; min-height: 0; padding: 7px 12px; font-size: 13px; background: #2a2f3b; border-radius: 999px; }
+  .b-som[aria-pressed="true"] { background: #1f7a4a; }
+  #lista-avisos { display: grid; gap: 6px; }
+  /* fechada: só os 2 avisos mais novos */
+  #lista-avisos:not(.aberta) .aviso:nth-child(n+3) { display: none; }
+  .b-mais { width: 100%; min-height: 0; margin-top: 6px; padding: 7px; font-size: 13px; font-weight: 700;
+    background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: 10px; }
+  .aviso { display: flex; gap: 8px; font-size: 13.5px; padding: 8px 10px; border-radius: 10px; background: var(--card-2);
+    border-left: 4px solid var(--muted); overflow-wrap: anywhere; }
+  .aviso time { color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+  .aviso.grave { border-color: var(--bad); background: var(--bad-soft); }
+  .aviso.atencao { border-color: var(--warn); }
+  .aviso.ok { border-color: var(--ok); }
+  .aviso.novo { animation: piscar 1s 4; }
+  .saude { font-size: 13px; margin: -4px 0 10px; padding: 8px 10px; border-radius: 10px; background: var(--card-2); }
+  .saude b { font-weight: 800; }
+  .saude.ok b { color: var(--ok); } .saude.atencao b { color: var(--warn); } .saude.grave b { color: var(--bad); }
+  .saude.parado { color: var(--muted); }
+  .rodape { color: var(--muted); font-size: 12px; text-align: center; margin-top: 14px; }
+
+  /* comentários de cada live + resposta */
+  .chat { background: var(--card-2); border-radius: 14px; padding: 10px; margin-bottom: 10px; }
+  .chat h3 { margin: 0 0 6px; font-size: 13.5px; color: var(--muted); font-weight: 700; }
+  .chat-lista { height: 50vh; min-height: 220px; max-height: 480px; overflow-y: auto; align-content: start; display: grid; gap: 4px; -webkit-overflow-scrolling: touch; }
+  .coment { font-size: 14px; padding: 6px 8px; border-radius: 8px; background: #181b22; overflow-wrap: anywhere; }
+  .coment b { display: block; color: var(--ok); font-weight: 700; font-size: 12.5px; margin-bottom: 1px; }
+  .coment.eu { background: rgba(255, 77, 94, .12); border-left: 3px solid var(--bad); }
+  .coment.eu b { color: var(--bad); }
+  .coment.evento { background: transparent; color: var(--muted); font-size: 12.5px; font-style: italic; padding: 3px 8px; }
+  .coment:active { background: #222734; }
+  .chat-vazio { color: var(--muted); font-size: 13px; margin: 4px 0; }
+  .responder { display: flex; gap: 8px; margin-top: 8px; }
+  .responder input { flex: 1; min-width: 0; font: inherit; font-size: 16px; color: var(--text); background: #0b0d12;
+    border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+  .responder input:focus { outline: none; border-color: var(--blue); }
+  .responder button { width: auto; min-height: 0; padding: 0 16px; font-size: 15px; background: var(--blue); border-radius: 12px; }
+  .contador { color: var(--muted); font-size: 11.5px; text-align: right; margin-top: 3px; }
+
+  /* ---------- cada plataforma com a sua cor (para não confundir) ---------- */
+  :root { --acc: #8b91a1; --acc2: #8b91a1; --acc-soft: rgba(139, 145, 161, .12); }
+  [data-plat="tiktok"] { --acc: #fe2c55; --acc2: #25f4ee; --acc-soft: rgba(254, 44, 85, .13); }
+  [data-plat="shopee"] { --acc: #ee4d2d; --acc2: #ff9a5c; --acc-soft: rgba(238, 77, 45, .14); }
+  html body[data-plat="tiktok"] { background: linear-gradient(180deg, rgba(254, 44, 85, .10), transparent 260px) var(--bg); }
+  html body[data-plat="shopee"] { background: linear-gradient(180deg, rgba(238, 77, 45, .12), transparent 260px) var(--bg); }
+  .logo-plat { width: 22px; height: 22px; flex: none; }
+
+  /* seletor de plataforma: fica preso no alto ao rolar */
+  .seletor { position: sticky; top: 0; z-index: 6; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+    margin: 0 -16px 12px; padding: 8px 16px 10px; background: rgba(11, 12, 16, .92);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+  .seletor .plat-btn { position: relative; display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 2px 8px;
+    text-align: left; width: 100%; min-height: 0; padding: 10px 12px; border-radius: 14px; background: var(--card);
+    border: 2px solid var(--line); color: var(--text); font-weight: 700; }
+  .plat-btn .logo-plat { grid-row: span 2; color: var(--acc); }
+  .plat-btn .plat-nome { font-size: 16px; font-weight: 800; }
+  .plat-btn .plat-status { font-size: 12px; font-weight: 700; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .plat-btn .plat-status.no_ar { color: var(--ok); }
+  .seletor .plat-btn.ativa { border-color: var(--acc); background: var(--acc-soft); box-shadow: 0 0 0 1px var(--acc) inset; }
+  .plat-btn .novas { position: absolute; top: -7px; right: -5px; min-width: 22px; height: 22px; padding: 0 6px;
+    border-radius: 999px; background: var(--acc); color: #fff; font-size: 12px; font-weight: 800;
+    display: grid; place-items: center; box-shadow: 0 0 0 2px var(--bg); }
+  .plat-painel:not(.ativa) { display: none; }
+
+  /* cabeçalho colorido de cada plataforma */
+  .plat-painel { border-color: color-mix(in srgb, var(--acc) 45%, var(--line)); }
+  .plat-cab { display: flex; align-items: center; gap: 10px; margin: -14px -14px 12px; padding: 12px 14px;
+    border-radius: 15px 15px 0 0; }
+  .plat-cab h2 { margin: 0; font-size: 19px; font-weight: 800; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .plat-cab .pill { background: rgba(0, 0, 0, .35); border-color: rgba(255, 255, 255, .25); color: #fff; }
+  .plat-cab .pill.no_ar { background: #fff; color: #0a7a3f; border-color: #fff; }
+  [data-plat="tiktok"] .plat-cab { background: #000; border-bottom: 3px solid #fe2c55; box-shadow: 0 3px 0 -1px #25f4ee; }
+  [data-plat="tiktok"] .plat-cab .logo-plat { color: #fff; filter: drop-shadow(-1.5px -1px 0 #25f4ee) drop-shadow(1.5px 1px 0 #fe2c55); }
+  [data-plat="shopee"] .plat-cab { background: #ee4d2d; }
+  [data-plat="shopee"] .plat-cab .logo-plat { color: #fff; }
+  .plat-painel .chat h3 { color: var(--acc); }
+  .plat-painel .responder button { background: var(--acc); }
+  .plat-painel .responder input:focus { border-color: var(--acc); }
+  .plat-painel .online { box-shadow: inset 4px 0 0 var(--acc); }
+
+  /* contador "Oferta termina em" no vídeo da live */
+  .crono { background: var(--card-2); border-radius: 14px; padding: 10px; margin-bottom: 10px; }
+  .crono-topo { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+  .crono-topo b { font-size: 14px; }
+  .crono-status { font-size: 12.5px; font-weight: 800; padding: 4px 10px; border-radius: 999px; background: #20242e;
+    color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .crono-status.normal { background: var(--acc-soft, rgba(238, 77, 45, .16)); color: var(--acc, #ff8a5c); }
+  .crono-status.urgente { background: #e02424; color: #fff; }
+  .crono-tempos { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 6px; }
+  .crono button { min-height: 44px; padding: 8px 4px; font-size: 14.5px; border-radius: 11px; background: #20242e; }
+  .crono-tempos button.on { background: var(--acc-soft); box-shadow: 0 0 0 1.5px var(--acc) inset; color: #fff; }
+  .crono-livre { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; color: var(--muted); font-size: 13.5px; }
+  .crono-livre input { width: 64px; font: inherit; font-size: 16px; text-align: center; color: var(--text); background: #0b0d12;
+    border: 1px solid var(--line); border-radius: 10px; padding: 9px 6px; }
+  .crono-acoes { display: grid; grid-template-columns: 2fr 1fr; gap: 6px; }
+  .crono .b-iniciar { background: var(--acc); }
+  .crono .b-parar { background: transparent; color: var(--bad); box-shadow: 0 0 0 1.5px rgba(255, 77, 94, .5) inset; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Lives</h1>
+  <span class="conexao" id="conexao"><span class="dot"></span><span id="conexao-txt">conectando...</span></span>
+</header>
+
+<section class="card avisos">
+  <div class="topo"><h2>Avisos</h2>
+    <button type="button" class="b-som" id="b-som" aria-pressed="false">🔕 Ligar som</button></div>
+  <div id="lista-avisos"><p class="texto">Nenhum aviso. Se algo acontecer, aparece aqui (o computador continua agindo sozinho).</p></div>
+  <button type="button" class="b-mais" id="b-mais-avisos" hidden></button>
+</section>
+
+<section class="alarme" id="alarme" role="alert">
+  <b id="alarme-titulo"></b>
+  <p id="alarme-detalhe"></p>
+  <button type="button" class="b-ok" id="alarme-ok">Ok, vi</button>
+</section>
+
+<nav class="seletor" aria-label="Plataforma">
+  <button type="button" class="plat-btn" data-plat="tiktok" id="aba-tiktok"><svg class="logo-plat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 12a4 4 0 1 0 4 4V4a5 5 0 0 0 5 5"/></svg>
+    <span class="plat-nome">TikTok</span><span class="plat-status" id="aba-tiktok-status">—</span>
+    <span class="novas" id="aba-tiktok-novas" hidden></span></button>
+  <button type="button" class="plat-btn" data-plat="shopee" id="aba-shopee"><svg class="logo-plat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+    <span class="plat-nome">Shopee</span><span class="plat-status" id="aba-shopee-status">—</span>
+    <span class="novas" id="aba-shopee-novas" hidden></span></button>
+</nav>
+
+<section class="card plat-painel" id="painel-tiktok" data-plat="tiktok">
+  <div class="plat-cab"><svg class="logo-plat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 12a4 4 0 1 0 4 4V4a5 5 0 0 0 5 5"/></svg><h2 id="tt-nome">TikTok</h2><span class="pill" id="tt-pill"><span class="dot"></span><span>—</span></span></div>
+  <div class="online"><span id="tt-online">—</span><small>pessoas assistindo agora</small><em id="tt-var"></em></div>
+  <div class="extras">
+    <div><b id="tt-min">—</b><small>entrando por minuto</small></div>
+    <div><b id="tt-5min">—</b><small>entraram em 5 min</small></div>
+    <div><b id="tt-entradas">—</b><small id="tt-entradas-rotulo">entradas na live</small></div>
+  </div>
+  <p class="texto" id="tt-tempo"></p>
+  <p class="titulo-live" id="tt-titulo"></p>
+  <div class="crono" data-lado="st">
+    <div class="crono-topo"><b>⏱ Contador no TikTok</b><span class="crono-status" id="crono-st">Desligado</span></div>
+    <div class="crono-tempos">
+      <button type="button" data-seg="60">1 min</button><button type="button" data-seg="180">3 min</button>
+      <button type="button" data-seg="300" class="on">5 min</button><button type="button" data-seg="600">10 min</button>
+    </div>
+    <div class="crono-livre">ou
+      <input type="number" inputmode="numeric" min="0" max="99" value="5" class="c-min" aria-label="Minutos"> min
+      <input type="number" inputmode="numeric" min="0" max="59" value="0" class="c-seg" aria-label="Segundos"> s</div>
+    <div class="crono-acoes">
+      <button type="button" class="b-iniciar">▶ Iniciar contador</button>
+      <button type="button" class="b-parar">■ Parar</button>
+    </div>
+  </div>
+  <div class="chat" data-site="tiktok">
+    <h3>💬 Comentários do TikTok</h3>
+    <div class="chat-lista" id="tiktok-chat"><p class="chat-vazio">Carregando...</p></div>
+    <form class="responder" data-site="tiktok">
+      <input type="text" id="tiktok-resposta" maxlength="100" placeholder="Responder no TikTok..." autocomplete="off" enterkeyhint="send">
+      <button type="submit">Enviar</button>
+    </form>
+    <div class="contador" id="tiktok-contador">0/100</div>
+  </div>
+  <p class="ultima" id="tt-ultima"></p>
+  <p class="envio" id="st-envio"></p>
+  <p class="saude" id="st-saude"></p>
+  <img class="previa" id="st-previa" alt="">
+  <button type="button" class="b-encerrar" data-acao="tiktok_encerrar"
+          data-confirmar="Encerrar a live no TikTok agora?">⏹ Encerrar live no TikTok</button>
+</section>
+
+<section class="card plat-painel" id="painel-shopee" data-plat="shopee">
+  <div class="plat-cab"><svg class="logo-plat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg><h2>Shopee</h2><span class="pill" id="sh-pill"><span class="dot"></span><span>—</span></span></div>
+  <div class="online"><span id="sh-online">—</span><small>pessoas assistindo agora</small><em id="sh-var"></em></div>
+  <div class="extras">
+    <div><b id="sh-min">—</b><small>entrando por minuto</small></div>
+    <div><b id="sh-5min">—</b><small>entraram em 5 min</small></div>
+    <div><b id="sh-pico">—</b><small>pico</small></div>
+  </div>
+  <p class="texto" id="sh-tempo"></p>
+  <p class="titulo-live" id="sh-titulo"></p>
+  <div class="crono" data-lado="ts">
+    <div class="crono-topo"><b>⏱ Contador na Shopee</b><span class="crono-status" id="crono-ts">Desligado</span></div>
+    <div class="crono-tempos">
+      <button type="button" data-seg="60">1 min</button><button type="button" data-seg="180">3 min</button>
+      <button type="button" data-seg="300" class="on">5 min</button><button type="button" data-seg="600">10 min</button>
+    </div>
+    <div class="crono-livre">ou
+      <input type="number" inputmode="numeric" min="0" max="99" value="5" class="c-min" aria-label="Minutos"> min
+      <input type="number" inputmode="numeric" min="0" max="59" value="0" class="c-seg" aria-label="Segundos"> s</div>
+    <div class="crono-acoes">
+      <button type="button" class="b-iniciar">▶ Iniciar contador</button>
+      <button type="button" class="b-parar">■ Parar</button>
+    </div>
+  </div>
+  <div class="chat" data-site="shopee">
+    <h3>💬 Comentários da Shopee</h3>
+    <div class="chat-lista" id="shopee-chat"><p class="chat-vazio">Carregando...</p></div>
+    <form class="responder" data-site="shopee">
+      <input type="text" id="shopee-resposta" maxlength="150" placeholder="Responder na Shopee..." autocomplete="off" enterkeyhint="send">
+      <button type="submit">Enviar</button>
+    </form>
+    <div class="contador" id="shopee-contador">0/150</div>
+  </div>
+  <p class="ultima" id="sh-ultima"></p>
+  <p class="envio" id="ts-envio"></p>
+  <p class="saude" id="ts-saude"></p>
+  <img class="previa" id="ts-previa" alt="">
+  <button type="button" class="b-encerrar" data-acao="shopee_encerrar"
+          data-confirmar="Encerrar a live na Shopee agora?">⏹ Encerrar live na Shopee</button>
+</section>
+
+<button type="button" class="b-tudo" data-acao="encerrar_tudo"
+        data-confirmar="Encerrar as DUAS lives (TikTok e Shopee) agora?">⏹ Encerrar as duas lives</button>
+
+<details id="notif">
+  <summary>🔔 Notificações no iPhone</summary>
+  <div class="notif">
+    <p>Erros, restrições e perguntas do chat (dizendo se é do TikTok ou da Shopee) chegam como notificação,
+       mesmo com a tela bloqueada e esta página fechada. Usa o app grátis <b>ntfy</b>.</p>
+    <ol>
+      <li>Instale o app <b>ntfy</b> na App Store e abra.</li>
+      <li>Toque em <b>+</b> e digite exatamente o nome do canal abaixo. Deixe o servidor padrão (ntfy.sh).</li>
+      <li>Toque em <b>Subscribe</b> e permita as notificações.</li>
+      <li>Toque em <b>Testar</b> aqui embaixo.</li>
+    </ol>
+    <label class="rotulo-canal" for="ntfy-topico">Nome do canal (secreto: não mostre para ninguém)</label>
+    <div class="canal">
+      <input id="ntfy-topico" readonly value="carregando...">
+      <button type="button" id="ntfy-copiar">Copiar</button>
+    </div>
+    <button type="button" id="ntfy-testar" class="b-testar">🔔 Testar notificação</button>
+    <p class="notif-info" id="ntfy-info"></p>
+  </div>
+</details>
+
+<details>
+  <summary>Últimas mensagens do painel</summary>
+  <div id="log"></div>
+</details>
+
+<p class="rodape">Os avisos sonoros só tocam com esta página aberta e a tela ligada (as notificações do ntfy chegam sempre). Funciona só no Wi-Fi de casa. Encerrar usa o Chrome do computador (Gerenciador de LIVE e página da live da Shopee).</p>
+
+<div class="aviso-toast" id="toast" role="status"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const ESTADO = { parado: "Parado", aguardando: "Aguardando", ao_vivo: "Enviando ao vivo", reprise: "Reprise no ar",
+                 reconectando: "Reconectando" };
+const ALARMES = {
+  restricao: "⛔ Apareceu um aviso de restrição e a live daquela plataforma foi encerrada (a outra continua).",
+  restricao_falhou: "⛔ Aviso de restrição! Não consegui encerrar a live. Encerre agora.",
+  restricao_desligada: "⛔ Apareceu um aviso de restrição (a proteção está desligada).",
+  finalizar_tiktok: "⚠ A live parou na Shopee e o envio para o TikTok parou. Encerre a live no TikTok.",
+  finalizar_shopee: "⚠ A live acabou no TikTok, mas não consegui finalizar na Shopee.",
+  tempo_tiktok: "⏰ O tempo de loop acabou e a reprise parou de ir para o TikTok.",
+  tempo_shopee: "⏰ O tempo de loop acabou e a reprise parou de ir para a Shopee.",
+};
+let ultimoLog = 0, ocupado = false, ultimoAviso = 0, primeiraLeitura = true;
+
+// som dos avisos: o navegador só deixa tocar depois de um toque na tela (por isso o botão)
+let somLigado = false, audio = null;
+try { somLigado = localStorage.getItem("som") === "1"; } catch (e) {}
+function marcarSom() {
+  $("b-som").textContent = somLigado ? "🔔 Som ligado" : "🔕 Ligar som";
+  $("b-som").setAttribute("aria-pressed", String(somLigado));
+}
+function bipe(grave) {
+  if (navigator.vibrate) navigator.vibrate(grave ? [500, 200, 500, 200, 500] : [300]);
+  if (!somLigado) return;
+  try {
+    audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+    const vezes = grave ? 3 : 1;
+    for (let i = 0; i < vezes; i++) {
+      const o = audio.createOscillator(), g = audio.createGain();
+      o.frequency.value = grave ? 880 : 660; o.connect(g); g.connect(audio.destination);
+      const t0 = audio.currentTime + i * 0.45;
+      g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.4, t0 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.35);
+      o.start(t0); o.stop(t0 + 0.4);
+    }
+  } catch (e) {}
+}
+
+const NIVEL = { ok: "🟢 Boa", atencao: "🟡 Atenção", grave: "🔴 Problema" };
+function mostrarSaude(el, s) {
+  if (!s || s.nivel === "parado") { el.className = "saude parado"; el.textContent = "Transmissão: ⚪ sem envio"; return; }
+  el.className = "saude " + s.nivel;
+  const nums = [s.velocidade != null ? s.velocidade.toFixed(2).replace(".", ",") + "x" : null,
+                s.bitrate != null ? fmt(s.bitrate) + " kbps" : null].filter(Boolean).join(" · ");
+  el.innerHTML = "Transmissão: <b></b>" + (nums ? " · " + nums : "") + (s.problemas.length ? "<br>" : "");
+  el.querySelector("b").textContent = NIVEL[s.nivel] || s.nivel;
+  if (s.problemas.length) el.append(s.problemas.join(" · "));
+}
+function mostrarAvisos(lista) {
+  if (!lista.length) return;
+  const box = $("lista-avisos");
+  if (ultimoAviso === 0) box.innerHTML = "";
+  let pior = null;
+  for (const a of lista) {
+    const d = document.createElement("div");
+    d.className = "aviso " + a.nivel + (primeiraLeitura ? "" : " novo");
+    const h = document.createElement("time"); h.textContent = a.hora.slice(0, 5);
+    d.append(h, document.createTextNode(a.texto));
+    box.prepend(d);
+    ultimoAviso = Math.max(ultimoAviso, a.id);
+    if (a.nivel === "grave") pior = "grave"; else if (a.nivel === "atencao" && !pior) pior = "atencao";
+  }
+  while (box.children.length > 12) box.lastElementChild.remove();
+  marcarMaisAvisos();
+  if (!primeiraLeitura && pior) { bipe(pior === "grave"); toast(lista[lista.length - 1].texto, pior !== "grave"); }
+}
+function marcarMaisAvisos() {
+  const box = $("lista-avisos"), n = box.querySelectorAll(".aviso").length, b = $("b-mais-avisos");
+  b.hidden = n <= 2;
+  b.textContent = box.classList.contains("aberta") ? "Mostrar só os últimos" : "Ver avisos anteriores (" + (n - 2) + ")";
+}
+const fmt = (n) => n == null ? "—" : Number(n).toLocaleString("pt-BR");
+
+function tempo(seg) {
+  if (seg == null) return "—";
+  const h = Math.floor(seg / 3600), m = Math.floor(seg % 3600 / 60);
+  return h ? h + "h" + String(m).padStart(2, "0") : m + "min";
+}
+function pill(el, no_ar, pausada) {
+  el.className = "pill " + (pausada ? "pausada" : no_ar ? "no_ar" : "");
+  el.lastElementChild.textContent = pausada ? "PAUSADA" : no_ar ? "AO VIVO" : "FORA DO AR";
+}
+function envio(el, lado) {
+  if (!lado.rodando) { el.innerHTML = "Painel: <b>sem envio</b>"; return; }
+  const t = lado.ao_vivo_seg != null ? " há " + tempo(lado.ao_vivo_seg) : "";
+  el.innerHTML = "Painel: <b>" + (ESTADO[lado.estado] || lado.estado) + "</b>" + t + (lado.pausa ? " · Shopee pausada" : "");
+}
+function previa(el, lado, sentido) {
+  // só aparece quando a imagem chega de verdade
+  const no_ar = lado.rodando && (lado.estado === "ao_vivo" || lado.estado === "reprise");
+  if (!no_ar) { el.classList.remove("on"); return; }
+  const img = new Image();
+  img.onload = () => { el.src = img.src; el.classList.add("on"); };
+  img.onerror = () => el.classList.remove("on");
+  img.src = "/api/preview.jpg?lado=" + sentido + "&t=" + Date.now();
+}
+function toast(texto, ok) {
+  const t = $("toast");
+  t.textContent = texto; t.className = "aviso-toast on " + (ok ? "ok" : "erro");
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => t.className = "aviso-toast", 4500);
+}
+
+async function atualizar() {
+  try {
+    const r = await fetch("/api/estado?desde=" + ultimoLog + "&aviso=" + ultimoAviso, { cache: "no-store" });
+    if (!r.ok) throw new Error(r.status);
+    const s = await r.json();
+    $("conexao").className = "conexao on"; $("conexao-txt").textContent = "conectado · " + s.hora;
+    $("tt-ultima").textContent = s.tiktok.ultima || "";
+    $("sh-ultima").textContent = s.shopee.ultima || "";
+    situacaoShopee = s.shopee.situacao || "";
+    envio($("st-envio"), s.lados.st); envio($("ts-envio"), s.lados.ts);
+    mostrarSaude($("st-saude"), s.saude.st); mostrarSaude($("ts-saude"), s.saude.ts);
+    mostrarAvisos(s.avisos); primeiraLeitura = false;
+    if (s.contador) mostrarCronos(s.contador);
+    previa($("st-previa"), s.lados.st, "st"); previa($("ts-previa"), s.lados.ts, "ts");
+
+    const lado = s.lados.st.alarme ? s.lados.st : s.lados.ts.alarme ? s.lados.ts : null;
+    $("alarme").classList.toggle("on", !!lado);
+    if (lado) {
+      $("alarme-titulo").textContent = ALARMES[lado.alarme_tipo] || "⚠ Alarme no painel: " + lado.alarme_tipo;
+      $("alarme-detalhe").textContent = (lado.alarme_detalhe || "").split("||")[0];
+      if (navigator.vibrate && !atualizar.vibrou) { navigator.vibrate([400, 200, 400]); atualizar.vibrou = true; }
+    } else atualizar.vibrou = false;
+
+    const box = $("log");
+    for (const l of s.logs) {
+      const d = document.createElement("div");
+      d.className = l.nivel; d.textContent = l.hora + "  " + l.texto;
+      box.prepend(d); ultimoLog = Math.max(ultimoLog, l.id);
+    }
+    while (box.children.length > 80) box.lastElementChild.remove();
+  } catch (e) {
+    $("conexao").className = "conexao off";
+    $("conexao-txt").textContent = "sem conexão com o computador";
+  }
+}
+
+// pessoas online: número grande + quanto mudou desde a última leitura (▲ verde / ▼ vermelho)
+const anterior = {};
+function online(qual, n) {
+  $(qual + "-online").textContent = fmt(n);
+  const v = $(qual + "-var");
+  if (n != null && anterior[qual] != null && n !== anterior[qual]) {
+    const d = n - anterior[qual];
+    v.textContent = (d > 0 ? "▲ +" : "▼ ") + fmt(d);
+    v.className = d > 0 ? "sobe" : "desce";
+  } else if (n == null) { v.textContent = ""; }
+  if (n != null) anterior[qual] = n;
+}
+const mais = (n) => n == null ? "—" : "+" + fmt(n);
+
+// ---- abas TikTok / Shopee: só uma aparece por vez, cada uma com a sua cor
+let plataforma = null;
+const novas = { tiktok: 0, shopee: 0 };
+function selecionar(p, salvar = true) {
+  plataforma = p;
+  document.body.dataset.plat = p;
+  for (const q of ["tiktok", "shopee"]) {
+    $("painel-" + q).classList.toggle("ativa", q === p);
+    $("aba-" + q).classList.toggle("ativa", q === p);
+  }
+  novas[p] = 0; marcarNovas();
+  document.querySelector('meta[name="theme-color"]').content = p === "tiktok" ? "#000000" : "#ee4d2d";
+  if (salvar) { try { localStorage.setItem("plataforma", p); } catch (e) {} }
+  const box = $(p + "-chat"); if (box) box.scrollTop = box.scrollHeight;
+}
+function marcarNovas() {
+  for (const q of ["tiktok", "shopee"]) {
+    const b = $("aba-" + q + "-novas");
+    b.hidden = !novas[q]; b.textContent = novas[q] > 99 ? "99+" : String(novas[q]);
+  }
+}
+function statusAba(q, no_ar, pausada, n) {
+  const el = $("aba-" + q + "-status");
+  el.className = "plat-status" + (no_ar && !pausada ? " no_ar" : "");
+  el.textContent = pausada ? "⏸ Pausada" : no_ar ? "● Ao vivo" + (n != null ? " · " + fmt(n) + " 👀" : "") : "Fora do ar";
+}
+document.querySelectorAll(".plat-btn").forEach(b => b.addEventListener("click", () => selecionar(b.dataset.plat)));
+try { const salva = localStorage.getItem("plataforma"); if (salva === "tiktok" || salva === "shopee") selecionar(salva, false); } catch (e) {}
+if (location.hash === "#tiktok" || location.hash === "#shopee") selecionar(location.hash.slice(1), false);   // atalho: .../#shopee
+if (!plataforma) selecionar("tiktok", false);
+let escolheuSozinho = false;
+
+// A página da SUA live da Shopee está aberta no Chrome? Sem ela, os números que chegam são da live da
+// Shopee que vai para o TikTok (origem, muitas vezes de outra loja): não é a sua live na Shopee.
+let situacaoShopee = "";
+const minhaShopeeAberta = (sh) => sh.origem === false || (sh.origem !== true && (situacaoShopee === "ao_vivo" || situacaoShopee === "preparada"));
+
+// pessoas online e números das lives (a cada 3 s)
+async function atualizarLives() {
+  try {
+    const [tt, sh] = await Promise.all([
+      fetch("/api/tiktok_live", { cache: "no-store" }).then(r => r.json()),
+      fetch("/api/shopee_live", { cache: "no-store" }).then(r => r.json())]);
+    if (tt.ok) {
+      $("tt-nome").textContent = "TikTok · @" + tt.conta;
+      if (tt.conta) { meusNomes.add(tt.conta); meusNomes.add("@" + tt.conta); }
+      conferirLive("tiktok", tt);
+      pill($("tt-pill"), tt.no_ar, tt.pausada);
+      statusAba("tiktok", tt.no_ar, tt.pausada, tt.no_ar ? tt.assistindo : null);
+      online("tt", tt.no_ar ? tt.assistindo : null);
+      $("tt-min").textContent = mais(tt.entrando_min);
+      $("tt-5min").textContent = mais(tt.entrando_5min);
+      $("tt-entradas").textContent = fmt(tt.entradas);
+      // pelo Gerenciador, conto quem entrou desde que a página dele foi aberta
+      $("tt-entradas-rotulo").textContent = tt.fonte === "gerenciador" ? "entraram (Gerenciador)" : "entradas na live";
+      $("tt-tempo").textContent = tt.pausada ? "Live pausada" : tt.no_ar ? "No ar há " + tempo(tt.no_ar_seg) : "Live encerrada (números finais)";
+      $("tt-titulo").textContent = tt.titulo || "";
+    } else $("tt-titulo").textContent = "⚠ " + tt.detalhe;
+    if (sh.ok && !minhaShopeeAberta(sh)) {
+      // não é a sua live: mostra como fora do ar e explica de onde vêm os números
+      pill($("sh-pill"), false, false);
+      statusAba("shopee", false, false, null);
+      online("sh", null);
+      $("sh-min").textContent = "—"; $("sh-5min").textContent = "—"; $("sh-pico").textContent = "—";
+      $("sh-tempo").textContent = "Você não está ao vivo na Shopee agora.";
+      $("sh-titulo").textContent = sh.no_ar
+        ? "A live da Shopee que vai para o TikTok é de " + (sh.nome || "outra loja") + (sh.titulo ? " (" + sh.titulo + ")" : "") +
+          ", com " + fmt(sh.espectadores) + " assistindo."
+        : "";
+    } else if (sh.ok) {
+      pill($("sh-pill"), sh.no_ar, false);
+      statusAba("shopee", sh.no_ar, false, sh.no_ar ? sh.espectadores : null);
+      online("sh", sh.no_ar ? sh.espectadores : null);
+      $("sh-min").textContent = mais(sh.entrando_min);
+      $("sh-5min").textContent = mais(sh.entrando_5min);
+      $("sh-pico").textContent = fmt(sh.pico);
+      $("sh-tempo").textContent = (sh.no_ar ? "No ar há " + tempo(sh.no_ar_seg) + " · " : "Live encerrada (números finais) · ") +
+                                  fmt(sh.visualizacoes) + " visualizações · " + fmt(sh.curtidas) + " curtidas";
+      $("sh-titulo").textContent = (sh.nome ? sh.nome + " · " : "") + (sh.titulo || "");
+      if (sh.nome) meusNomes.add(sh.nome);
+      conferirLive("shopee", sh);
+    } else $("sh-titulo").textContent = "⚠ " + sh.detalhe;
+    if (!escolheuSozinho) {
+      // primeira vez (sem escolha salva): abre na plataforma que está no ar
+      escolheuSozinho = true;
+      let salva = null; try { salva = localStorage.getItem("plataforma"); } catch (e) {}
+      const shNoAr = !!(sh.ok && sh.no_ar && minhaShopeeAberta(sh)), ttNoAr = !!(tt.ok && tt.no_ar);
+      if (!salva && shNoAr !== ttNoAr) selecionar(ttNoAr ? "tiktok" : "shopee", false);
+    }
+  } catch (e) { /* sem conexão: o aviso do topo já mostra */ }
+  if (!nomesProntos) { nomesProntos = true; atualizarComentarios(); }
+}
+
+document.querySelectorAll("[data-acao]").forEach(b => b.addEventListener("click", async () => {
+  if (ocupado) return;
+  if (!confirm(b.dataset.confirmar)) return;
+  ocupado = true;
+  const botoes = document.querySelectorAll("button[data-acao]");
+  botoes.forEach(x => x.disabled = true);
+  const original = b.textContent; b.textContent = "Aguarde...";
+  try {
+    const r = await (await fetch("/api/acao", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                body: JSON.stringify({ acao: b.dataset.acao }) })).json();
+    toast((r.ok ? "✅ " : "⚠ ") + (r.detalhe || (r.ok ? "Feito" : "Não deu certo")), r.ok);
+  } catch (e) {
+    toast("⚠ Sem conexão com o computador. Está no Wi-Fi de casa?", false);
+  } finally {
+    b.textContent = original; botoes.forEach(x => x.disabled = false); ocupado = false;
+    atualizar(); atualizarLives();
+  }
+}));
+// ---- contador "Oferta termina em" (o celular conta sozinho entre uma leitura e outra)
+let cronos = {}, cronosEm = 0;
+function mostrarCronos(c) { cronos = c; cronosEm = Date.now(); desenharCronos(); }
+function desenharCronos() {
+  for (const lado of ["ts", "st"]) {
+    const e = cronos[lado] || { fase: "off" }, el = $("crono-" + lado);
+    if (!el) continue;
+    let fase = e.fase, texto = "Desligado";
+    if (fase === "normal" || fase === "urgente") {
+      // zerou: some da tela (igual ao vídeo)
+      const resta = Math.max(0, e.resta - Math.floor((Date.now() - cronosEm) / 1000));
+      if (resta <= 60) fase = "urgente";
+      if (resta <= 0) fase = "off";
+      else texto = "Na tela · " + String(Math.floor(resta / 60)).padStart(2, "0") + ":" + String(resta % 60).padStart(2, "0");
+    } else fase = "off";
+    el.className = "crono-status " + (fase === "off" ? "" : fase);
+    el.textContent = texto;
+  }
+}
+setInterval(desenharCronos, 250);
+async function pedirContador(dados) {
+  try {
+    const r = await (await fetch("/api/contador", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                     body: JSON.stringify(dados) })).json();
+    if (r.ok) { mostrarCronos(r.contador); toast(dados.acao === "parar" ? "✅ Contador tirado da tela" : "✅ Contador na tela", true); }
+    else toast("⚠ " + (r.detalhe || r.erro || "Não deu certo"), false);
+  } catch (e) { toast("⚠ Sem conexão com o computador. Está no Wi-Fi de casa?", false); }
+}
+document.querySelectorAll(".crono").forEach(caixa => {
+  const lado = caixa.dataset.lado, min = caixa.querySelector(".c-min"), seg = caixa.querySelector(".c-seg");
+  const tempos = caixa.querySelectorAll(".crono-tempos button");
+  tempos.forEach(b => b.addEventListener("click", () => {
+    tempos.forEach(x => x.classList.toggle("on", x === b));
+    min.value = Math.floor(b.dataset.seg / 60); seg.value = b.dataset.seg % 60;
+  }));
+  [min, seg].forEach(i => i.addEventListener("input", () => tempos.forEach(x => x.classList.remove("on"))));
+  caixa.querySelector(".b-iniciar").addEventListener("click", () => {
+    const total = Math.round(Number(min.value) || 0) * 60 + Math.round(Number(seg.value) || 0);
+    if (total < 5 || total > 99 * 60 + 59) { toast("⚠ Escolha um tempo entre 5 segundos e 99 minutos.", false); return; }
+    pedirContador({ lado, acao: "iniciar", segundos: total });
+  });
+  caixa.querySelector(".b-parar").addEventListener("click", () => pedirContador({ lado, acao: "parar" }));
+});
+
+$("alarme-ok").addEventListener("click", async () => {
+  try { await fetch("/api/acao", { method: "POST", headers: { "Content-Type": "application/json" },
+                                   body: JSON.stringify({ acao: "alarme_ok" }) }); } catch (e) {}
+  atualizar();
+});
+
+// ---- comentários de cada live (a cada 2 s) e resposta pelo celular
+// A página da live só mostra as últimas mensagens; o celular vai juntando tudo aqui, então as antigas
+// não somem (a lista vira rolagem). Nomes: cliente em verde, você em vermelho.
+// avisos automáticos do chat (fulano entrou, está comprando, curtiu...) não são perguntas: ficam de fora.
+// Exceção, a seu pedido: "entrou na live por Nº...", "começou a seguir" e "está/estão comprando produtos"
+// aparecem no chat (em cinza). Nas notificações do app ntfy eles NÃO entram.
+// avisos automáticos da live: a pedido (24/11) NÃO aparecem no chat, que mostra só clientes e as suas respostas
+const RE_EVENTO = /\bentr(ou|aram)\s+(na\s+live\s+)?por\b|\boutr[oa]s?\s+(\d+\s+)?usu[aá]rios?\b|\b\d+\s+outr[oa]s?\s+usu[aá]rios?\b|come[çc](ou|ar|aram) a seguir|seguir o apresentador|est(á|a|ão|ao) comprando|est(á|a|ão|ao) vendo o produto|acab(ou|aram) de entrar|bem-vind[oa] (à|a|ao) shopee live/i;
+const RE_SISTEMA = /est(á|a|ão|ao) comprando|compr(ou|aram)|acab(ou|aram) de entrar|\bentr(ou|aram)\b|seguiu|come[çc](ou|ar) a seguir|seguir o apresentador|compartilhou|curtiu|enviou (um )?presente|is buying|bought|just joined|\bjoined\b|followed|shared|liked/i;
+const RE_SISTEMA_INICIO = /^(est(á|a|ão|ao) comprando|compr(ou|aram)|acab(ou|aram) de entrar|entr(ou|aram)|seguiu|come[çc](ou|ar) a seguir|seguir o apresentador|compartilhou|curtiu|enviou (um )?presente|is buying|just joined|joined|followed|shared|liked)\b/i;
+const RE_SISTEMA_FRASE = /acab(ou|aram) de entrar|est(á|a|ão|ao) vendo o produto/i;   // "1 pessoa está vendo o produto nº 1" (TikTok)
+// "fulano está comprando produtos!" / "fulano e 3 estão comprando produtos!": a seu pedido, fora do chat
+const RE_COMPRANDO = /est(á|a|ão|ao) comprando/i;
+const RE_GRUPO = /^(e|and)\s+(mais\s+)?\d+\s+(outr[oa]s\s+|pessoas\s+|others?\s+)?/i;   // "e 3 entraram!"
+const RE_SELO = /^(apresentador[a]?|anfitri[ãa]o|anfitri[ãa])\s*/i;      // selo que a Shopee põe antes do seu nome
+const MAX_HIST = 300;
+const meusNomes = new Set();                 // nome da sua loja/conta (vem das informações das lives)
+function lerGuardado(chave, padrao) { try { return JSON.parse(localStorage.getItem(chave)) || padrao; } catch (e) { return padrao; } }
+function guardar(chave, valor) { try { localStorage.setItem(chave, JSON.stringify(valor)); } catch (e) {} }
+const enviadas = lerGuardado("chat_enviadas", { tiktok: [], shopee: [] });   // o que você respondeu pelo celular
+// cada live tem o seu chat: guardo junto a hora em que a live começou; live nova = chat limpo
+const historico = {}, inicioLive = {};
+for (const site of ["tiktok", "shopee"]) {
+  const g = lerGuardado("chat_" + site, null);
+  const valido = g && Date.now() - g.t < 12 * 3600 * 1000;      // muito antigo: começa limpo
+  historico[site] = valido ? g.lista.filter(m => m.eu || (!m.evento && !RE_EVENTO.test((m.nome || "") + " " + (m.texto || ""))
+                                           && !RE_SISTEMA_FRASE.test(m.texto || ""))) : [];
+  inicioLive[site] = valido ? (g.inicio || null) : null;
+}
+function salvarChat(site) {
+  guardar("chat_" + site, { t: Date.now(), inicio: inicioLive[site], lista: historico[site] });
+}
+// chamada com as informações da live: se começou outra live, apaga o chat da anterior
+function conferirLive(site, info) {
+  if (!info || !info.no_ar || info.no_ar_seg == null) return;
+  const inicio = Math.round(Date.now() / 1000 - info.no_ar_seg);
+  if (inicioLive[site] != null && Math.abs(inicio - inicioLive[site]) <= 90) return;   // a mesma live
+  if (inicioLive[site] != null || historico[site].length) {
+    historico[site] = [];
+    desenhado[site] = "";
+  }
+  inicioLive[site] = inicio;
+  salvarChat(site);
+}
+
+function souEu(site, nome, texto) {
+  const n = nome.toLowerCase();
+  if (n && [...meusNomes].some(x => x.toLowerCase() === n)) return true;
+  return enviadas[site].some(t => t && t.length >= 4 && (texto === t || texto.endsWith(t)));
+}
+function normalizar(site, m) {
+  let nome = (m.nome || "").trim(), texto = (m.texto || "").trim(), eu = !!m.eu;
+  if (!eu && RE_COMPRANDO.test(nome + " " + texto)) return { nome: "", texto: "", eu: false };   // ehPergunta descarta
+  // "fulano entrou na live por Nº.3 ...  Ver" / "fulano acabou de começar a seguir o apresentador!"
+  if (m.evento || RE_EVENTO.test(nome + " " + texto)) {
+    const linha = (nome ? nome + " " + texto : texto).replace(/\s+Ver$/i, "").replace(/\s+/g, " ");
+    return { nome: "", texto: linha, eu: false, evento: true };
+  }
+  if (!nome) {
+    // "ApresentadorLive Ofertaskkkk quem dera!": selo + nome + texto colados numa linha só
+    const selo = texto.match(RE_SELO);
+    if (selo) { eu = true; texto = texto.slice(selo[0].length); }
+    for (const x of meusNomes) {
+      if (x && texto.toLowerCase().startsWith(x.toLowerCase())) {
+        nome = texto.slice(0, x.length); texto = texto.slice(x.length).trim(); eu = true; break;
+      }
+    }
+  }
+  eu = eu || souEu(site, nome, texto);
+  if (eu && !nome) nome = "Você";
+  return { nome, texto, eu };
+}
+const RE_SISTEMA_MEIO = /bem-vind[oa] (à|a|ao) shopee live|\w\.\.\.\s+(e\s+(mais\s+)?\d+\s+)?(entr(ou|aram)|est(á|a|ão|ao) comprando|come[çc](ou|aram)|acab(ou|aram)|compr(ou|aram)|segui(u|ram)|compartilh(ou|aram)|curti(u|ram))/i;   // avisos colados numa linha só
+function ehPergunta(m) {
+  if (!m.texto) return false;
+  if (m.eu) return true;
+  if (m.evento) return false;                      // aviso automático: fora do chat
+  if (RE_SISTEMA_MEIO.test(m.nome + " " + m.texto) || RE_EVENTO.test(m.nome + " " + m.texto)) return false;
+  if (RE_SISTEMA_FRASE.test(m.nome + " " + m.texto)) return false;
+  // avisos em grupo com o nome separado: "fulano" + "e 3 entraram!" -> olha o que vem depois do "e 3"
+  return !(m.nome ? RE_SISTEMA_INICIO.test(m.texto.replace(RE_GRUPO, "")) : RE_SISTEMA.test(m.texto));
+}
+
+// junta as mensagens que a página mostra agora com as que o celular já tinha
+const chaveMsg = (m) => m.nome + "\u0001" + m.texto;
+function juntar(site, novos) {
+  const h = historico[site], hk = h.map(chaveMsg), nk = novos.map(chaveMsg);
+  let add = null;
+  // o normal: o fim do que já tenho é o começo do que a página mostra agora
+  for (let k = Math.min(hk.length, nk.length); k > 0 && add === null; k--) {
+    let igual = true;
+    for (let i = 0; i < k; i++) if (hk[hk.length - k + i] !== nk[i]) { igual = false; break; }
+    if (igual) add = novos.slice(k);
+  }
+  if (add === null) {
+    // senão: entra só o que vem depois da última mensagem que eu já conheço
+    const conhecidas = new Set(hk.slice(-80));
+    let j = -1;
+    nk.forEach((x, i) => { if (conhecidas.has(x)) j = i; });
+    add = novos.slice(j + 1);
+  }
+  if (!add.length) return 0;
+  historico[site] = h.concat(add).slice(-MAX_HIST);
+  salvarChat(site);
+  return add.filter(m => !m.eu && !m.evento).length;     // comentários de clientes que chegaram agora
+}
+
+const desenhado = { tiktok: "", shopee: "" };
+const primeiraCarga = { tiktok: true, shopee: true };     // o que já estava no chat ao abrir não conta como novo
+function mostrarComentarios(site, c) {
+  const novos = (c.lista || []).map(m => normalizar(site, m)).filter(ehPergunta);
+  if (c.ok) {
+    const chegaram = juntar(site, novos);
+    if (chegaram && site !== plataforma && !primeiraCarga[site]) { novas[site] += chegaram; marcarNovas(); }
+    primeiraCarga[site] = false;
+  }
+  const lista = historico[site];
+  const box = $(site + "-chat");
+  const chave = lista.length + "|" + (lista.length ? chaveMsg(lista[lista.length - 1]) : (c.ok ? "" : c.detalhe));
+  if (chave === desenhado[site]) return;               // nada mudou: não mexe (não atrapalha a rolagem)
+  desenhado[site] = chave;
+  const noFim = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+  box.innerHTML = "";
+  if (!lista.length) {
+    const p = document.createElement("p"); p.className = "chat-vazio";
+    p.textContent = c.ok ? "Nenhuma pergunta ainda." : c.detalhe;
+    box.append(p);
+  }
+  for (const m of lista) {
+    const d = document.createElement("div"); d.className = "coment" + (m.eu ? " eu" : "") + (m.evento ? " evento" : "");
+    if (m.nome) { const b = document.createElement("b"); b.textContent = m.nome; d.append(b); }
+    const t = document.createElement("span"); t.textContent = m.texto; d.append(t);
+    // tocar no comentário de um cliente: começa a resposta com @nome
+    d.addEventListener("click", () => {
+      if (!m.nome || m.eu) return;
+      const inp = $(site + "-resposta");
+      inp.value = "@" + m.nome + " " + inp.value.replace(/^@\S+\s*/, "");
+      contar(site); inp.focus();
+    });
+    box.append(d);
+  }
+  if (noFim) box.scrollTop = box.scrollHeight;
+}
+function lembrarEnviada(site, texto) {
+  enviadas[site] = enviadas[site].concat(texto).slice(-50);
+  guardar("chat_enviadas", enviadas);
+}
+let nomesProntos = false;          // espera saber o nome da sua loja antes de ler o chat
+async function atualizarComentarios() {
+  if (!nomesProntos) return;
+  try {
+    const r = await (await fetch("/api/comentarios", { cache: "no-store" })).json();
+    mostrarComentarios("tiktok", r.tiktok); mostrarComentarios("shopee", r.shopee);
+  } catch (e) { /* sem conexão: o aviso do topo já mostra */ }
+}
+function contar(site) {
+  const inp = $(site + "-resposta");
+  $(site + "-contador").textContent = inp.value.length + "/" + inp.maxLength;
+}
+document.querySelectorAll("form.responder").forEach(f => {
+  const site = f.dataset.site, inp = $(site + "-resposta"), botao = f.querySelector("button");
+  inp.addEventListener("input", () => contar(site));
+  f.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const texto = inp.value.trim();
+    if (!texto || botao.disabled) return;
+    botao.disabled = true; botao.textContent = "...";
+    try {
+      const r = await (await fetch("/api/responder", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                       body: JSON.stringify({ site, texto }) })).json();
+      toast((r.ok ? "✅ " : "⚠ ") + (r.detalhe || (r.ok ? "Enviado" : "Não deu certo")), r.ok);
+      if (r.ok) { lembrarEnviada(site, texto.replace(/\s+/g, " ")); inp.value = ""; contar(site); }
+    } catch (e) {
+      toast("⚠ Sem conexão com o computador. Está no Wi-Fi de casa?", false);
+    } finally {
+      botao.disabled = false; botao.textContent = "Enviar";
+      setTimeout(atualizarComentarios, 1000);
+    }
+  });
+});
+
+$("b-mais-avisos").addEventListener("click", () => {
+  $("lista-avisos").classList.toggle("aberta");
+  marcarMaisAvisos();
+});
+$("b-som").addEventListener("click", () => {
+  somLigado = !somLigado;
+  try { localStorage.setItem("som", somLigado ? "1" : "0"); } catch (e) {}
+  marcarSom();
+  if (somLigado) bipe(false);          // toca um bipe de teste (e libera o som no navegador)
+});
+marcarSom();
+// celular (principalmente iPhone): o som só fica liberado depois do primeiro toque na página
+document.addEventListener("pointerdown", () => {
+  if (!somLigado) return;
+  try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); audio.resume(); } catch (e) {}
+}, { once: true });
+
+// ---- notificações no iPhone (app ntfy)
+async function carregarNotificacoes() {
+  try {
+    const r = await fetch("/api/notificacoes", { cache: "no-store" });
+    if (!r.ok) throw new Error("antigo");
+    const n = await r.json();
+    $("ntfy-topico").value = n.topico;
+    $("ntfy-info").textContent = !n.ligado ? "⚠ As notificações estão desligadas no config.json (ntfy_ligado)."
+      : (n.perguntas ? "Ligado: erros, restrições e perguntas." : "Ligado: erros e restrições (perguntas desligadas).") +
+        (n.ultimo_erro ? " ⚠ Último envio falhou: " + n.ultimo_erro : "");
+    $("ntfy-testar").disabled = false;
+  } catch (e) {
+    $("ntfy-topico").value = "—";
+    $("ntfy-info").textContent = "Feche e abra o painel no computador para ativar as notificações.";
+    $("ntfy-testar").disabled = true;
+  }
+}
+$("notif").addEventListener("toggle", () => { if ($("notif").open) carregarNotificacoes(); });
+$("ntfy-topico").addEventListener("focus", (ev) => ev.target.select());
+$("ntfy-copiar").addEventListener("click", async () => {
+  const inp = $("ntfy-topico");
+  let ok = false;
+  try { await navigator.clipboard.writeText(inp.value); ok = true; } catch (e) {}
+  if (!ok) {   // fora de https o iPhone não deixa usar a área de transferência direto
+    inp.focus(); inp.setSelectionRange(0, inp.value.length);
+    try { ok = document.execCommand("copy"); } catch (e) {}
+  }
+  toast(ok ? "✅ Nome do canal copiado." : "Segure o dedo no nome do canal para copiar.", ok);
+});
+$("ntfy-testar").addEventListener("click", async () => {
+  const b = $("ntfy-testar");
+  b.disabled = true; b.textContent = "Enviando...";
+  try {
+    const r = await (await fetch("/api/acao", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                body: JSON.stringify({ acao: "ntfy_teste" }) })).json();
+    toast((r.ok ? "✅ " : "⚠ ") + r.detalhe, r.ok);
+  } catch (e) {
+    toast("⚠ Sem conexão com o computador. Está no Wi-Fi de casa?", false);
+  } finally {
+    b.disabled = false; b.textContent = "🔔 Testar notificação";
+    carregarNotificacoes();
+  }
+});
+
+atualizar(); atualizarLives(); atualizarComentarios();
+setInterval(atualizar, 2000);
+setInterval(atualizarLives, 3000);
+setInterval(atualizarComentarios, 2000);
+</script>
+</body>
+</html>

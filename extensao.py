@@ -28,10 +28,12 @@ class PonteExtensao:
         self._loop = None
         self._conexoes = set()
         self._abas = {}
+        self._abas_hora = 0.0      # quando a extensão mandou a lista de abas pela última vez
         self._pendentes = {}
         self._ids = itertools.count(1)
         self._thread = None
         self.erro_inicio = ""
+        self.ao_aviso = None   # função(site, texto): aviso de restrição lido na Shopee ou no TikTok
 
     # ------------------------------------------------------------ servidor
 
@@ -78,6 +80,12 @@ class PonteExtensao:
                     continue
                 if d.get("tipo") == "estado":
                     self._abas = d.get("abas") or {}
+                    self._abas_hora = time.time()
+                elif d.get("tipo") == "aviso":
+                    # fora desta thread: quem trata vai pedir coisas à extensão por esta mesma conexão
+                    if self.ao_aviso:
+                        threading.Thread(target=self.ao_aviso, args=(str(d.get("site") or ""), str(d.get("texto") or "")),
+                                         daemon=True, name="aviso-restricao").start()
                 elif d.get("tipo") == "resultado":
                     p = self._pendentes.get(d.get("id"))
                     if p:
@@ -106,7 +114,7 @@ class PonteExtensao:
 
     # ------------------------------------------------------------ pedidos (qualquer thread)
 
-    def _pedir(self, tipo, timeout):
+    def _pedir(self, tipo, timeout, **extra):
         conexoes = list(self._conexoes)
         if not conexoes or not self._loop:
             return {"ok": False, "detalhe": "A extensão não está conectada. O Chrome está aberto "
@@ -114,7 +122,7 @@ class PonteExtensao:
         ident = next(self._ids)
         p = {"evento": threading.Event(), "resultado": None, "respostas": 0, "esperadas": len(conexoes)}
         self._pendentes[ident] = p
-        msg = json.dumps({"tipo": tipo, "id": ident})
+        msg = json.dumps({**extra, "tipo": tipo, "id": ident})
         for c in conexoes:
             asyncio.run_coroutine_threadsafe(c.send(msg), self._loop)
         try:
@@ -145,8 +153,55 @@ class PonteExtensao:
     def tiktok_diagnostico(self):
         return self._pedir("tiktok_diagnostico", timeout=6)
 
+    # ---- comentários das lives (lidos da página) e resposta pelo celular
+
+    def comentarios(self, site, max_idade=40):
+        """Últimos comentários do chat da live aberta no Chrome: {"lista": [{nome, texto}], "caixa": bool} ou None."""
+        if not self._conexoes or time.time() - self._abas_hora > max_idade:
+            return None
+        for a in self._por_preferencia(self._abas_do_site(site)):
+            if isinstance(a.get("comentarios"), list):
+                return {"lista": a["comentarios"][-30:], "caixa": bool(a.get("tem_caixa"))}
+        return None
+
+    def responder(self, site, texto):
+        """Escreve 'texto' na caixa de comentário da live (Shopee ou TikTok) e envia."""
+        return self._pedir(f"{'tiktok' if site == 'tiktok' else 'shopee'}_responder", timeout=12, texto=texto)
+
     def _abas_do_site(self, site):
         return [a for a in self._abas.values() if (a.get("site") or "shopee") == site]
+
+    @staticmethod
+    def _por_preferencia(abas):
+        """Abas com a live no ar primeiro; depois a usada mais recentemente."""
+        return sorted(abas, key=lambda a: (a.get("situacao") == "ao_vivo", a.get("quando") or 0), reverse=True)
+
+    def numeros_tiktok(self, max_idade=45):
+        """Números da live lidos da página do Gerenciador de LIVE aberta no Chrome:
+        {"espectadores", "entradas" (desde que a página abriu), "no_ar_seg", "ao_vivo"} ou None.
+        A extensão manda quando muda e a cada 15 s; mais velho que max_idade não vale."""
+        if not self._conexoes or time.time() - self._abas_hora > max_idade:
+            return None
+        for a in self._por_preferencia(self._abas_do_site("tiktok")):
+            n = a.get("numeros")
+            if isinstance(n, dict) and n.get("espectadores") is not None:
+                return {**n, "ao_vivo": a.get("situacao") == "ao_vivo"}
+        return None
+
+    @property
+    def sessao_shopee(self):
+        """Número da live da Shopee aberta no Chrome (da url ...?session=123), ou None.
+        Prefere a aba com a live no ar (a que tem 'Finalizar Transmissão')."""
+        if not self._conexoes:
+            return None
+        import re
+        abas = self._por_preferencia(self._abas_do_site("shopee"))
+        abas.sort(key=lambda a: a.get("situacao") == "ao_vivo" or "/pc/live" in (a.get("url") or ""), reverse=True)
+        for a in abas:
+            m = re.search(r"[?&]session(?:_id)?=(\d+)", a.get("url") or "")
+            if m:
+                return m.group(1)
+        return None
 
     @property
     def status_tiktok(self):

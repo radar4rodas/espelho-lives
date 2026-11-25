@@ -24,6 +24,8 @@ import threading
 import time
 from pathlib import Path
 
+import contador
+
 log = logging.getLogger("espelho")
 
 BASE = Path(__file__).resolve().parent
@@ -32,11 +34,19 @@ TAXA_VOZ = 16000
 
 # O modelo em português "ouve" TikTok como "tique toque" e Shopee ("xópi") como "chope".
 # Procurar só por estas frases (o resto vira [unk]) é bem mais confiável do que transcrever tudo.
+# Saudações também são mutadas nas duas direções (ex.: "boa noite" numa live que sai em outro horário).
+SAUDACOES = {("boa", "noite"): "boa noite", ("boa", "tarde"): "boa tarde", ("bom", "dia"): "bom dia"}
+_FRASES_SAUDACAO = list(SAUDACOES.values())
 GRAMATICAS = {
-    "tiktok": ["tique toque", "tique toque shop", "tique toque shopping", "[unk]"],
-    "shopee": ["chope", "[unk]"],
+    "tiktok": ["tique toque", "tique toque shop", "tique toque shopping"] + _FRASES_SAUDACAO + ["[unk]"],
+    # Shopee -> TikTok: "Shopee" vira "chope"; "shop"/"shopping" sozinhos; e "Pix" (o modelo não conhece "pix":
+    # ouve "piques"). O TikTok Shop trata "pague no Pix" / "na Shopee" como mandar o cliente para fora (aviso de 23/11).
+    "shopee": ["chope", "shop", "shopping", "piques"] + _FRASES_SAUDACAO + ["[unk]"],
 }
-DESCRICAO_MUDO = {"tiktok": "'tiktok' e 'tiktok shop'", "shopee": "'shopee'"}
+# palavra reconhecida -> nome que aparece no registro
+MUDO_SHOPEE = {"chope": "shopee", "shop": "shop", "shopping": "shop", "piques": "pix"}
+DESCRICAO_MUDO = {"tiktok": "'tiktok', 'tiktok shop', 'bom dia', 'boa tarde' e 'boa noite'",
+                  "shopee": "'shopee', 'shop', 'pix', 'bom dia', 'boa tarde' e 'boa noite'"}
 PALAVRAS_SHOP = {"shop", "shopping"}
 FOLGA_ANTES = 0.15   # segundos de mudo antes da palavra
 FOLGA_DEPOIS = 0.20  # e depois
@@ -103,6 +113,8 @@ _RUIDO = ("PPS id out of range", "undecodable NALU", "non-existing PPS", "no fra
           "error while decoding MB", "concealing", "Invalid NAL unit", "missing picture in access unit",
           "reference picture missing", "Missing reference picture", "Timestamps are unset",
           "timestamp discontinuity",
+          # o próprio ffmpeg corrige (soma 1 no tempo); não muda nada na live, só enchia a janela
+          "Non-monotonic DTS", "may result in incorrect timestamps",
           "Last message repeated")
 
 
@@ -171,6 +183,38 @@ class VigiaRelogio:
         return len(self.marcas) >= self.limite
 
 
+def _erro_de_imagem(linha):
+    """Mensagem do decodificador de vídeo: um pedaço da imagem que chegou não pôde ser decodificado."""
+    return linha.startswith(("[hevc @", "[h264 @"))
+
+
+class VigiaImagem:
+    """Percebe quando a imagem TRAVOU de vez (e não foi só um tropeço da internet).
+
+    Acontece quando quem faz a live troca de codificador no meio dela (ex.: o vídeo passa de 24 para
+    30 quadros por segundo). O servidor manda as "instruções" novas do vídeo (VPS/SPS/PPS) só uma vez,
+    e o ffmpeg, ao copiar o vídeo HEVC do FLV para o MPEG-TS, continua repetindo as antigas. Daí em
+    diante nenhum quadro decodifica: no TikTok a tela congela e só a voz passa, até o fim da live.
+    Uma conexão nova recebe as instruções certas logo no começo, e a imagem volta.
+
+    Tropeço normal: erros por 1 ou 2 segundos, até o próximo quadro-chave. Travado: erros que não
+    param, espalhados por vários segundos."""
+
+    def __init__(self, duracao=5.0, janela=12.0, minimo=3):
+        self.duracao, self.janela, self.minimo = duracao, janela, minimo
+        self.marcas = collections.deque()
+
+    def travou(self, agora=None):
+        agora = time.monotonic() if agora is None else agora
+        self.marcas.append(agora)
+        while self.marcas and agora - self.marcas[0] > self.janela:
+            self.marcas.popleft()
+        return len(self.marcas) >= self.minimo and self.marcas[-1] - self.marcas[0] >= self.duracao
+
+    def zerar(self):
+        self.marcas.clear()
+
+
 def _cabecalhos(cabecalhos):
     if not cabecalhos:
         return []
@@ -186,11 +230,8 @@ def cmd_entrada(ffmpeg, url, cabecalhos, porta_voz, arquivo=None, repetir=False,
             cmd += ["-ss", f"{inicio:.1f}"]
         # Gravações de live costumam ter "pulos" no relógio (a live engasgou enquanto gravava). Sem
         # corrigir, a reprise fica segundos sem mandar nada e depois manda tudo de uma vez, e a Shopee
-        # derruba a conexão. dts_delta_threshold 4 = emenda os pulos maiores que 4 s.
-        # NÃO usar 1: um buraco de ~2 s só no vídeo (sem buraco no áudio) faz o ffmpeg corrigir vídeo e
-        # áudio um contra o outro sem parar, o -re perde o ritmo e a reprise passa a correr ~20% mais
-        # rápido que o normal. Depois de uns 20 min adiantada, a Shopee derruba a conexão.
-        cmd += ["-dts_delta_threshold", "4", "-fflags", "+genpts",
+        # derruba a conexão. dts_delta_threshold 1 = emenda qualquer pulo maior que 1 s.
+        cmd += ["-dts_delta_threshold", "1", "-fflags", "+genpts",
                 "-re", "-stream_loop", "-1" if repetir else "0", "-i", str(arquivo)]
     else:
         cmd += _cabecalhos(cabecalhos)
@@ -209,9 +250,105 @@ def cmd_entrada(ffmpeg, url, cabecalhos, porta_voz, arquivo=None, repetir=False,
     return cmd
 
 
-def cmd_saida(cfg, ffmpeg, porta_ts, preview, deslocamento=0.0):
+# ms que a imagem é atrasada no OBS para casar com o som que vai pelo CABLE (medidos). Negativo = atrasa a
+# VOZ (quando ela chega antes da boca mesmo sem atrasar a imagem).
+# Depende do formato do vídeo que vem da Shopee:
+AJUSTE_VOZ_HEVC = 300     # HEVC com quadros B (algumas lojas da Shopee). Medido em 19/11.
+AJUSTE_VOZ_H264 = 0       # H.264 sem quadros B (outras lojas). Medido em 19/11 (+7 ms com 0).
+AJUSTE_VOZ_PADRAO = AJUSTE_VOZ_HEVC      # formato ainda desconhecido / valor fixo sem número
+AJUSTE_VOZ_REPRISE = 50   # reprise: vídeo refeito em H.264. Medido em 18/11 com flash + bipe.
+AJUSTE_POR_FORMATO = {"hevc": AJUSTE_VOZ_HEVC, "h264": AJUSTE_VOZ_H264}
+# Obs.: o "audio buffering" que aparece no registro do OBS NÃO atrasa esse som (medido em 18/11:
+# compensar ele adiantava a voz 1 s).
+
+
+def _ms(valor, padrao, minimo=-1000, maximo=2000):
+    try:
+        return max(minimo, min(maximo, int(valor)))
+    except (TypeError, ValueError):
+        return padrao
+
+
+def chave_ajuste_medido(formato):
+    """Onde fica guardado, no config, o último valor que o vigia achou para este formato de vídeo."""
+    return f"ajuste_voz_medido_{formato}" if formato in AJUSTE_POR_FORMATO else "ajuste_voz_medido_outro"
+
+
+def ajuste_voz_efetivo(cfg, reprise=False, formato=None):
+    """Shopee -> TikTok: quantos ms a imagem é atrasada para a voz casar com a boca (negativo = a voz é que
+    é atrasada). Automático (padrão): o último valor que o vigia da sincronia achou para esse formato de
+    vídeo (HEVC ou H.264); sem medição ainda, o valor medido para o formato."""
+    if cfg.get("sincronia_auto", True):
+        if reprise:
+            return AJUSTE_VOZ_REPRISE
+        padrao = AJUSTE_POR_FORMATO.get(formato, AJUSTE_VOZ_PADRAO)
+        return _ms(cfg.get(chave_ajuste_medido(formato), padrao), padrao)
+    return _ms(cfg.get("ajuste_voz_ms", AJUSTE_VOZ_PADRAO), AJUSTE_VOZ_PADRAO, minimo=0)
+
+
+_TIPOS_VIDEO = {0x1B: "h264", 0x24: "hevc"}
+
+
+def formato_do_ts(dados):
+    """Formato do vídeo (h264/hevc) lendo a tabela PMT do MPEG-TS, ou None se ainda não apareceu."""
+    pmts = set()
+    for i in range(0, len(dados) - 187, 188):
+        pkt = dados[i:i + 188]
+        if pkt[0] != 0x47 or not (pkt[1] & 0x40):
+            continue
+        pid = ((pkt[1] & 0x1F) << 8) | pkt[2]
+        p = 4
+        if pkt[3] & 0x20:                       # campo de adaptação
+            p += 1 + pkt[4]
+        if p >= 188:
+            continue
+        p += 1 + pkt[p]                         # pointer_field
+        if p + 12 > 188:
+            continue
+        tabela = pkt[p]
+        tam = ((pkt[p + 1] & 0x0F) << 8) | pkt[p + 2]
+        fim = min(188, p + 3 + tam - 4)
+        if pid == 0 and tabela == 0x00:         # PAT: onde está a PMT
+            q = p + 8
+            while q + 4 <= fim:
+                if ((pkt[q] << 8) | pkt[q + 1]) != 0:
+                    pmts.add(((pkt[q + 2] & 0x1F) << 8) | pkt[q + 3])
+                q += 4
+        elif tabela == 0x02 and (pid in pmts or not pmts):   # PMT: os tipos dos fluxos
+            q = p + 12 + (((pkt[p + 10] & 0x0F) << 8) | pkt[p + 11])
+            while q + 5 <= fim:
+                if pkt[q] in _TIPOS_VIDEO:
+                    return _TIPOS_VIDEO[pkt[q]]
+                q += 5 + (((pkt[q + 3] & 0x0F) << 8) | pkt[q + 4])
+    return None
+
+
+_FONTE_ETIQUETA =Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts" / "arialbd.ttf"
+
+
+def filtro_etiqueta():
+    """Etiqueta pequena "REPRISE" no canto de cima, à direita, em toda reprise (deixa claro que é gravação)."""
+    fonte = ""
+    if _FONTE_ETIQUETA.exists():
+        fonte = "fontfile='" + _FONTE_ETIQUETA.as_posix().replace(":", r"\:") + "':"
+    # pequena e bem no canto de cima, para não parecer nome de produto
+    return (f"drawtext={fonte}text='REPRISE':fontsize=h*0.0125:fontcolor=white@0.85:"
+            "box=1:boxcolor=black@0.45:boxborderw=5:x=w-tw-w*0.03:y=h*0.02")
+
+
+def _codificador(ffmpeg, cfg):
+    if nvenc_disponivel(ffmpeg):
+        # placa NVIDIA: quase não usa o processador
+        return ["-c:v", "h264_nvenc", "-preset", "p4", "-tune", "ll", "-rc", "cbr", "-bf", "0"]
+    return ["-c:v", "libx264", "-preset", cfg.get("preset_x264", "veryfast"), "-tune", "zerolatency",
+            "-sc_threshold", "0"]
+
+
+def cmd_saida(cfg, ffmpeg, porta_ts, preview, deslocamento=0.0, etiqueta=False, ajuste_voz=None, tela=None):
     """PROCESSADOR de um trecho: aplica o mudo (e recodifica, se for o caso) e devolve MPEG-TS no stdout.
-    'deslocamento' faz os tempos deste trecho continuarem de onde o trecho anterior parou."""
+    'deslocamento' faz os tempos deste trecho continuarem de onde o trecho anterior parou.
+    etiqueta=True (reprise): escreve "REPRISE" no vídeo, o que obriga a recodificar.
+    tela (contador.TelaFFmpeg): desenha o contador "Oferta termina em" (só para a Shopee; obriga a recodificar)."""
     cmd = [ffmpeg, "-hide_banner", "-loglevel", "warning", "-stats", "-y",
            "-analyzeduration", "1500000",
            "-f", "mpegts", "-i", f"tcp://127.0.0.1:{porta_ts}",
@@ -220,29 +357,51 @@ def cmd_saida(cfg, ffmpeg, porta_ts, preview, deslocamento=0.0):
     # volume@mute recebe, em tempo real, a lista de trechos a silenciar
     filtro_audio = "volume@mute=volume=1:eval=frame,aresample=44100"
     ab = f"{int(cfg['bitrate_audio_kbps'])}k"
+    marca = ("," + filtro_etiqueta()) if etiqueta else ""
+    # prévia no painel (1 quadro por segundo), com a etiqueta quando houver
+    vf_previa = ("fps=1," + filtro_etiqueta() + ",scale=360:-2") if etiqueta else "fps=1,scale=360:-2"
     if cfg.get("saida") == "obs":
         # Para o OBS (live de vendas do TikTok Shop): o vídeo vai como veio (o OBS decodifica),
         # só o áudio é refeito por causa do mudo. Leve para o computador.
-        cmd += ["-c:v", "copy",
-                "-af", "volume@mute=volume=1:eval=frame,aresample=48000", "-c:a", "aac", "-b:a", ab, "-ac", "2"]
+        # Na reprise o vídeo é refeito para levar a etiqueta "REPRISE".
+        if etiqueta:
+            # enc_time_base 1/90000: sem isso o codificador conta o tempo em quadros (1/30 s) e o atraso
+            # da imagem abaixo (ex.: 50 ms = 1,5 quadro) arredonda para dois quadros com o mesmo tempo,
+            # e o ffmpeg enche a janela de "Non-monotonic DTS".
+            cmd += ["-vf", "format=yuv420p" + marca] + _codificador(ffmpeg, cfg) + [
+                    "-profile:v", "main", "-pix_fmt", "yuv420p", "-enc_time_base:v", "1:90000",
+                    "-b:v", "4000k", "-maxrate", "4000k", "-bufsize", "8000k", "-g", "60", "-keyint_min", "60"]
+        else:
+            cmd += ["-c:v", "copy"]
+        # O som do OBS vai para o TikTok pelo monitoramento (CABLE Input), que chega um pouco depois da
+        # câmera virtual. Atrasa a imagem na mesma medida (ou, se o valor for negativo, atrasa a voz).
+        ajuste = ajuste_voz_efetivo(cfg) if ajuste_voz is None else ajuste_voz
+        if ajuste > 0:
+            cmd += ["-bsf:v", f"setts=ts=TS+{ajuste / 1000:.3f}/TB"]
+        cmd += ["-af", "volume@mute=volume=1:eval=frame,aresample=48000", "-c:a", "aac", "-b:a", ab, "-ac", "2"]
+        if ajuste < 0:
+            cmd += ["-bsf:a", f"setts=ts=TS+{-ajuste / 1000:.3f}/TB"]
         cmd += final
         if preview:
-            cmd += ["-map", "0:v:0", "-vf", "fps=1,scale=360:-2", "-q:v", "6",
+            cmd += ["-map", "0:v:0", "-vf", vf_previa, "-q:v", "6",
                     "-update", "1", "-atomic_writing", "1", preview]
         return cmd
-    if cfg["modo"] == "copiar":
+    if cfg["modo"] == "copiar" and not etiqueta and tela is None:
         cmd += ["-c:v", "copy"]
     else:
         larg, alt = cfg["resolucao"].lower().split("x")
         fps = int(cfg["fps"])
         vb = int(cfg["bitrate_video_kbps"])
-        cmd += ["-vf", f"scale={larg}:{alt}:force_original_aspect_ratio=decrease,"
-                       f"pad={larg}:{alt}:(ow-iw)/2:(oh-ih)/2,fps={fps}"]
-        if nvenc_disponivel(ffmpeg):
-            # placa NVIDIA: quase não usa o processador
-            cmd += ["-c:v", "h264_nvenc", "-preset", "p4", "-tune", "ll", "-rc", "cbr", "-bf", "0"]
-        else:
-            cmd += ["-c:v", "libx264", "-preset", cfg["preset_x264"], "-tune", "zerolatency", "-sc_threshold", "0"]
+        # a etiqueta vai antes das faixas pretas, para ficar dentro da imagem
+        cadeia = (f"scale={larg}:{alt}:force_original_aspect_ratio=decrease{marca},"
+                  f"pad={larg}:{alt}:(ow-iw)/2:(oh-ih)/2,fps={fps}")
+        # o contador vai por cima de tudo (posição medida na imagem final, já com as faixas)
+        cmd += ["-vf", tela.filtro(cadeia) if tela is not None else cadeia]
+        if tela is not None:
+            # o ffmpeg lê UM comando do stdin por volta do laço, e o laço espera o intervalo das estatísticas
+            # (0,5 s por padrão): numa troca de fase do contador vão 4 comandos e formava fila. 0,1 s resolve.
+            cmd[1:1] = ["-stats_period", "0.1"]
+        cmd += _codificador(ffmpeg, cfg)
         cmd += ["-profile:v", "main", "-pix_fmt", "yuv420p",
                 "-b:v", f"{vb}k", "-maxrate", f"{vb}k", "-bufsize", f"{vb * 2}k",
                 "-g", str(fps * 2), "-keyint_min", str(fps * 2)]
@@ -250,7 +409,7 @@ def cmd_saida(cfg, ffmpeg, porta_ts, preview, deslocamento=0.0):
     cmd += ["-af", filtro_audio, "-c:a", "aac", "-b:a", "192k", "-ac", "2"]
     cmd += final
     if preview:
-        cmd += ["-map", "0:v:0", "-vf", "fps=1,scale=360:-2", "-q:v", "6",
+        cmd += ["-map", "0:v:0", "-vf", vf_previa, "-q:v", "6",
                 "-update", "1", "-atomic_writing", "1", preview]
     return cmd
 
@@ -366,14 +525,27 @@ class Censor:
 
     def alimentar(self, dados):
         self.amostras += len(dados) // 2
-        if self.rec.AcceptWaveform(dados):
+        final = self.rec.AcceptWaveform(dados)
+        if final:
             palavras = json.loads(self.rec.Result()).get("result", [])
         else:
             palavras = json.loads(self.rec.PartialResult()).get("partial_result", [])
+        for i in range(len(palavras) - 1):
+            a, b = palavras[i], palavras[i + 1]
+            nome = SAUDACOES.get((a["word"], b["word"]))
+            # as duas palavras coladas: "muito bom, e o dia..." (com pausa no meio) não conta.
+            # No resultado provisório, a última palavra ainda pode mudar de tempo: espera vir mais uma.
+            if nome and b["start"] - a["end"] < 0.15 and (final or i + 2 < len(palavras)):
+                self._mutar(max(0.0, a["start"] - FOLGA_ANTES), b["end"] + FOLGA_DEPOIS, nome)
         if self.alvo == "shopee":
-            for p in palavras:
-                if p["word"] == "chope":
-                    self._mutar(max(0.0, p["start"] - FOLGA_ANTES), p["end"] + FOLGA_DEPOIS, "shopee")
+            for j, p in enumerate(palavras):
+                nome = MUDO_SHOPEE.get(p["word"])
+                # "pix" ("piques") confunde com "pode pedir" no resultado provisório: só vale no resultado final
+                # (com boa confiança) ou, no provisório, se já veio mais uma palavra depois
+                if nome == "pix" and not ((final and p.get("conf", 1.0) >= 0.5) or (not final and j + 1 < len(palavras))):
+                    continue
+                if nome:
+                    self._mutar(max(0.0, p["start"] - FOLGA_ANTES), p["end"] + FOLGA_DEPOIS, nome)
             return
         for i in range(len(palavras) - 1):
             a, b = palavras[i], palavras[i + 1]
@@ -433,8 +605,11 @@ class Transmissao:
 
     def __init__(self, cfg, ffmpeg, url, cabecalhos, destino, preview=None,
                  aviso=None, sem_janela=False, resumir_stats=None,
-                 arquivo=None, repetir=False, gravar_em=None, renovar=None, silencioso=False):
+                 arquivo=None, repetir=False, gravar_em=None, renovar=None, silencioso=False, inicio=0.0,
+                 salvar_ajuste_voz=None):
         self.cfg = cfg
+        self.inicio = max(0.0, float(inicio or 0))   # reprise: começa deste ponto do vídeo (retomada após queda)
+        self.posicao_ao_cair = None     # reprise: ponto do vídeo que a Shopee estava mostrando quando acabou
         self.silencioso = silencioso    # tentativas durante a pausa: não enche o registro
         self.ffmpeg = ffmpeg
         self.arquivo = arquivo          # reprise: vídeo local no lugar da live
@@ -485,18 +660,35 @@ class Transmissao:
         self._trocando = False
         self._sem_troca = False         # pausa: deixa terminar o que está no atraso, sem reconectar
         self._trocas = collections.deque()
+        self._trocas_imagem = collections.deque()   # trocas feitas porque a imagem travou
+        # vigia da sincronia da voz (Shopee -> TikTok, live): mede de tempos em tempos e corrige sozinho
+        self._vigia_sincronia = self.para_obs and not arquivo
+        self._recentes = collections.deque()        # (momento, trecho, dados) que foram para o OBS
+        self._seg_ajuste = None                     # trecho que está saindo com self._ajuste_voz
+        self._formato = {}                          # trecho -> formato do vídeo (h264/hevc)
+        self.formato_video = None                   # formato do trecho que está saindo
+        self.salvar_ajuste_voz = salvar_ajuste_voz  # guarda no config.json o valor que o vigia achou
+        self._avisou_imagem = False
         self._processadores = {}        # trecho -> processo que aplica o mudo
         self._repasses = {}             # trecho -> thread que leva a saída do processador ao envio
         self._cmd_mudo = {}             # trecho -> último comando de mudo
         self._total_mudos = [0]
         self._relogio = RelogioTS()
-        self._ritmo0 = None             # gravação: relógio de parede quando o 1º vídeo foi para o envio
-        self._segurou = False
+        self._ajuste_voz = None         # OBS: atraso da imagem (ms) com que o trecho atual está saindo
         self.envio = None
         self._conn_envio = None
         self._srv_ts = self._srv_envio = None
         self._porta_ts = self._porta_envio = None
         self._threads = []
+        # contador "Oferta termina em" desenhado no vídeo (só TikTok -> Shopee; no TikTok quem desenha é o OBS)
+        self._tela = None
+        lado_contador = cfg.get("contador_lado")
+        if lado_contador and not self.para_obs:
+            try:
+                larg, alt = str(cfg.get("resolucao", "720x1280")).lower().split("x")
+                self._tela = contador.TelaFFmpeg(lado_contador, int(larg), int(alt))
+            except Exception as e:
+                log.warning("Não consegui preparar o contador na tela (%s). A live segue sem ele.", e)
 
     # -------------------------------------------------------- controle
 
@@ -512,6 +704,14 @@ class Transmissao:
                     p.kill()
                 except OSError:
                     pass
+
+    def reaplicar(self, motivo):
+        """Mudou um ajuste do vídeo (ex.: sincronia da voz): abre uma conexão nova, que já sai com o ajuste
+        novo, e troca sem parar a live (no máximo ~1 s de imagem parada)."""
+        if self._parar.is_set():
+            return
+        self._thread(lambda: self._trocar(motivo) or log.info(
+            "O ajuste vale a partir da próxima reconexão (não deu para trocar agora)."), "ajuste")
 
     def terminar_entrada(self):
         """Para de receber da origem, mas deixa sair o que já está no atraso (usado na pausa da Shopee).
@@ -543,8 +743,12 @@ class Transmissao:
                 log.log(nivel, "Mudo automático ligado: %s. Atraso de %.0fs.", DESCRICAO_MUDO[self.alvo_mudo], self.atraso)
             elif self.atraso:
                 log.log(nivel, "Atraso de %.0fs (mudo automático desligado).", self.atraso)
-            self._iniciar_entrada(self.url, self.cabecalhos, 1)
+            self._iniciar_entrada(self.url, self.cabecalhos, 1, inicio=self.inicio)
             self._thread(self._escrever_ts)
+            if self._vigia_sincronia:
+                self._thread(self._vigiar_sincronia, "sincronia")
+            if self._tela is not None:
+                self._thread(self._vigiar_contador, "contador")
             while not self._parar.is_set():
                 envio = self.envio
                 if envio is not None and envio.poll() is not None:
@@ -558,6 +762,7 @@ class Transmissao:
                     break
                 time.sleep(0.3)
         finally:
+            self.posicao_ao_cair = self.posicao()
             self.parar()
             for s in (self._srv_ts, self._srv_envio):
                 if s:
@@ -575,6 +780,17 @@ class Transmissao:
             return f"o vídeo da Shopee não chegou: {self.erro_entrada}" if self.para_obs \
                 else f"o vídeo do TikTok não chegou: {self.erro_entrada}"
         return self.erro_saida or self.erro_entrada
+
+    def posicao(self):
+        """Reprise: em que ponto do vídeo (s) está o que o destino está mostrando agora (já descontado o atraso)."""
+        if not self.arquivo:
+            return None
+        with self._lock:
+            quando_pos = self._inicio_seg.get(self._seg_ativo)
+        if not quando_pos:
+            return None
+        quando, pos = quando_pos
+        return max(0.0, pos + (time.monotonic() - quando) - self.atraso)
 
     # -------------------------------------------------------- entrada (um processo por trecho)
 
@@ -664,6 +880,89 @@ class Transmissao:
         if not self.arquivo:
             log.info("✅ Conexão trocada. A live seguiu sem parar.")
 
+    # -------------------------------------------------------- vigia da sincronia da voz
+
+    SINCRONIA_PRIMEIRA = 25      # s depois de o atraso encher: primeira medição
+    SINCRONIA_INTERVALO = 180    # depois, a cada 3 minutos
+    # Voz adiantada se percebe bem mais cedo do que voz atrasada (a partir de ~45 ms adiantada; atrasada
+    # só passa a incomodar perto de 100 ms). Por isso o alvo é a voz levemente depois da boca.
+    SINCRONIA_ALVO = 15          # ms
+    SINCRONIA_ADIANTADA = -30    # ms: voz mais adiantada que isso = corrige
+    SINCRONIA_ATRASADA = 60      # ms: voz mais atrasada que isso = corrige
+    SINCRONIA_CONFIANCA = (0.7, 0.6)   # mínimo para confiar na medição (imagem, voz)
+
+    def _original_recente(self, minimo=20.0):
+        """O que foi para o OBS nos últimos ~50 s, se for tudo do trecho que está saindo agora
+        (logo depois de uma troca de conexão os tempos mudam; aí espera encher de novo)."""
+        itens = list(self._recentes)
+        if not itens or itens[-1][1] != self._seg_ajuste:
+            return None
+        seg = itens[-1][1]
+        i = len(itens)
+        while i > 0 and itens[i - 1][1] == seg:
+            i -= 1
+        itens = itens[i:]
+        if itens[-1][0] - itens[0][0] < minimo:
+            return None
+        return b"".join(d for _, _, d in itens)
+
+    def _vigiar_sincronia(self):
+        """Shopee -> TikTok: de tempos em tempos confere se a voz que sai do OBS casa com a boca
+        (sincronia.medir) e, se estiver fora em duas medições seguidas, corrige o atraso da imagem
+        sozinho, sem parar a live. Só no modo Automático."""
+        import sincronia
+        espera = self.atraso + self.SINCRONIA_PRIMEIRA
+        anterior = None
+        while not self._parar.wait(espera):
+            espera = self.SINCRONIA_INTERVALO
+            if not self.cfg.get("sincronia_auto", True) or self._trocando or self._sem_troca:
+                anterior = None
+                continue
+            if self._original_recente() is None:      # trocou a conexão há pouco: espera encher
+                anterior, espera = None, 30
+                continue
+            ajuste, seg = self._ajuste_voz, self._seg_ajuste
+            try:
+                r = sincronia.medir(self.ffmpeg, self._original_recente)
+            except Exception as e:      # noqa: BLE001 - medir nunca pode atrapalhar a live
+                log.debug("sincronia: %s", e)
+                r = None
+            if self._parar.is_set():
+                break
+            ci, cv = self.SINCRONIA_CONFIANCA
+            if not r or r["conf_imagem"] < ci or r["conf_voz"] < cv or seg != self._seg_ajuste:
+                log.debug("Sincronia: medição sem confiança, tento de novo (%s).", r)
+                anterior, espera = None, 60
+                continue
+            voz = r["voz_ms"]
+            if self.SINCRONIA_ADIANTADA <= voz <= self.SINCRONIA_ATRASADA:
+                log.info("🎚 Sincronia da voz conferida: certa (%+d ms).", voz)
+                anterior = None
+                continue
+            if anterior is None or abs(anterior - voz) > 80 or (anterior > 0) != (voz > 0):
+                # fora: confirma com mais uma medição antes de mexer
+                log.debug("Sincronia: voz %+d ms; confirmando...", voz)
+                anterior, espera = voz, 20
+                continue
+            medido = round((anterior + voz) / 2)
+            anterior = None
+            novo = _ms(ajuste + max(-1000, min(1000, medido - self.SINCRONIA_ALVO)), ajuste)
+            if novo == ajuste:
+                continue
+            formato = self.formato_video
+            self.cfg[chave_ajuste_medido(formato)] = novo
+            if self.salvar_ajuste_voz:
+                try:
+                    self.salvar_ajuste_voz(chave_ajuste_medido(formato), novo)
+                except Exception as e:  # noqa: BLE001
+                    log.debug("salvar ajuste da voz: %s", e)
+            como = (f"imagem atrasada em {novo} ms" if novo >= 0 else f"voz atrasada em {-novo} ms")
+            log.info("🎚 Sincronia da voz: estava chegando %d ms %s da imagem. Corrigindo sozinho, sem parar "
+                     "a live (%s; vídeo %s)...", abs(medido), "depois" if medido > 0 else "antes", como,
+                     (formato or "?").upper())
+            self.reaplicar("sincronia automática da voz")
+            espera = self.atraso + self.SINCRONIA_PRIMEIRA
+
     def _verificar_fim(self):
         """Se a entrada atual acabou e não há troca em andamento, avisa que não vem mais vídeo."""
         with self._lock:
@@ -689,9 +988,9 @@ class Transmissao:
                 tentar = recebeu
         if self.arquivo:
             # reprise: o vídeo acabou. Em loop, recomeça emendado; senão, a sessão termina.
-            quando, _ = self._inicio_seg.get(seg, (time.monotonic(), 0))
+            quando, pos = self._inicio_seg.get(seg, (time.monotonic(), 0))
             if tentar and self.repetir and not self._parar.is_set():
-                if time.monotonic() - quando < 3:
+                if time.monotonic() - quando < 3 and pos < 1:   # retomado perto do fim: só recomeça
                     log.warning("O vídeo terminou logo depois de começar (arquivo com problema?). Parei o loop.")
                 else:
                     self._trocar("fim do vídeo", volta=True)
@@ -700,27 +999,57 @@ class Transmissao:
         self._verificar_fim()
 
     def _reiniciar_por_relogio(self, onde):
+        self._corrigir_origem(f"O relógio do vídeo que vem {onde} bagunçou (isso deixa a live travando e "
+                              "com a voz falhada).", "relógio do vídeo bagunçado")
+
+    MAX_TROCAS_IMAGEM = 3       # trocas por imagem travada dentro de JANELA_TROCAS_IMAGEM
+    JANELA_TROCAS_IMAGEM = 600.0
+
+    def _imagem_travada(self):
+        """A imagem que vem da origem parou de decodificar (só a voz passa). Conexão nova resolve."""
+        agora = time.monotonic()
+        with self._lock:
+            if self.precisa_reiniciar or self._parar.is_set() or self._trocando:
+                return
+            if self.arquivo:
+                # reprise: o defeito está gravado no arquivo; reabrir não adianta
+                if not self._avisou_imagem:
+                    self._avisou_imagem = True
+                    log.warning("⚠ Esta gravação tem um trecho com a imagem com defeito (foi gravada assim). "
+                                "Nesse trecho a imagem pode ficar parada enquanto a voz continua.")
+                return
+            trocas = self._trocas_imagem
+            while trocas and agora - trocas[0] > self.JANELA_TROCAS_IMAGEM:
+                trocas.popleft()
+            if len(trocas) >= self.MAX_TROCAS_IMAGEM:
+                # conexões novas não resolveram: não fica reconectando sem parar
+                if not self._avisou_imagem:
+                    self._avisou_imagem = True
+                    log.warning("⚠ A imagem que vem %s continua chegando com defeito mesmo com conexões novas "
+                                "(tentei %d vezes). Se a tela do TikTok estiver congelada, pare e inicie de novo.",
+                                self._origem(), len(trocas))
+                return
+            trocas.append(agora)
+        self._corrigir_origem(f"A imagem que vem {self._origem()} travou (só a voz está passando): quem está "
+                              "fazendo a live trocou a configuração do vídeo.", "imagem travada")
+
+    def _corrigir_origem(self, problema, motivo):
         with self._lock:
             if self.precisa_reiniciar or self._parar.is_set() or self._trocando:
                 return
             pode_trocar = bool(self.renovar) and not self._sem_troca
             if not pode_trocar:
                 self.precisa_reiniciar = True
-        if pode_trocar and self.arquivo:
-            log.warning("⚠ O relógio da gravação bagunçou neste trecho. Reabrindo o vídeo no mesmo ponto "
-                        "sem parar a live...")
-            threading.Thread(target=self._trocar_ou_reiniciar, daemon=True, name=nome_thread("troca")).start()
-        elif pode_trocar:
-            log.warning("⚠ O relógio do vídeo que vem %s bagunçou (isso deixa a live travando e com a voz "
-                        "falhada). Trocando a conexão sem parar a live...", onde)
-            threading.Thread(target=self._trocar_ou_reiniciar, daemon=True, name=nome_thread("troca")).start()
+        if pode_trocar:
+            log.warning("⚠ %s Trocando a conexão sem parar a live...", problema)
+            threading.Thread(target=lambda: self._trocar_ou_reiniciar(motivo), daemon=True,
+                             name=nome_thread("troca")).start()
         else:
-            log.warning("⚠ O relógio do vídeo que vem %s bagunçou (isso deixa a live travando e com a voz "
-                        "falhada). Reconectando para corrigir...", onde)
+            log.warning("⚠ %s Reconectando para corrigir...", problema)
             threading.Thread(target=self.parar, daemon=True, name=nome_thread("parar")).start()
 
-    def _trocar_ou_reiniciar(self):
-        if self._trocar("relógio do vídeo bagunçado") or self._parar.is_set():
+    def _trocar_ou_reiniciar(self, motivo="relógio do vídeo bagunçado"):
+        if self._trocar(motivo) or self._parar.is_set():
             return
         with self._lock:
             if self._sem_troca:
@@ -731,16 +1060,10 @@ class Transmissao:
 
     def _ler_stderr_entrada(self, proc, seg):
         vigia = VigiaRelogio(limite=30)            # "Non-monotonic DTS" seguidos na entrada
-        vigia_desc = VigiaRelogio(limite=8)        # gravação: correções de relógio em série = ritmo perdido
         ultima = ""
         for linha in proc.stderr:
             linha = linha.decode("utf-8", "replace").strip()
             if not linha or linha == ultima:
-                continue
-            if self.arquivo and "timestamp discontinuity" in linha:
-                log.debug("entrada %d: %s", seg, linha)
-                if vigia_desc.bagunçou() and seg == self._seg_ativo:
-                    self._reiniciar_por_relogio(self._origem())
                 continue
             if "Non-monotonic DTS" in linha or linha.startswith("Last message repeated"):
                 # o vídeo "voltou no tempo": acontece de vez em quando; muitas seguidas = relógio bagunçado
@@ -799,6 +1122,10 @@ class Transmissao:
                             log.warning("Não consegui criar o arquivo de gravação (%s). A live segue sem gravar.", e)
                             gravacao = None
                 self.ultimo_dado = time.monotonic()     # usado para perceber pausa na origem
+                if seg not in self._formato:
+                    f = formato_do_ts(dados)
+                    if f:
+                        self._formato[seg] = f
                 if gravacao:
                     try:
                         gravacao.write(dados)       # cópia exata do que chegou da origem
@@ -861,6 +1188,12 @@ class Transmissao:
                     conn.sendall(dados)
                 except OSError:
                     break
+                if self._vigia_sincronia:
+                    # o que acabou de ir para o OBS: o vigia da sincronia compara com o que sai dele
+                    agora = time.monotonic()
+                    self._recentes.append((agora, seg, dados))
+                    while self._recentes and agora - self._recentes[0][0] > 50:
+                        self._recentes.popleft()
         finally:
             if conn is not None:
                 self._fechar_processador(conn, seg_proc)
@@ -872,8 +1205,13 @@ class Transmissao:
             return None
         deslocamento = self._relogio.continuacao()
         self._relogio.novo_trecho()
+        if self.para_obs:
+            self.formato_video = self._formato.get(seg)
+            self._ajuste_voz = ajuste_voz_efetivo(self.cfg, reprise=bool(self.arquivo), formato=self.formato_video)
+            self._seg_ajuste = seg
         proc = subprocess.Popen(
-            cmd_saida(self.cfg, self.ffmpeg, self._porta_ts, self.preview, deslocamento),
+            cmd_saida(self.cfg, self.ffmpeg, self._porta_ts, self.preview, deslocamento,
+                      etiqueta=bool(self.arquivo), ajuste_voz=self._ajuste_voz, tela=self._tela),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=self.flags)
         with self._lock:
             self._processadores[seg] = proc
@@ -917,8 +1255,6 @@ class Transmissao:
             if not dados:
                 break
             self._relogio.ver(dados)
-            if self.arquivo:
-                self._segurar_ritmo()
             conn = self._garantir_envio()
             if conn is None:
                 break
@@ -926,25 +1262,6 @@ class Transmissao:
                 conn.sendall(dados)
             except OSError:
                 break
-
-    def _segurar_ritmo(self):
-        """Reprise: nunca manda para a Shopee/OBS mais rápido que o tempo real. Se o vídeo adiantar
-        (relógio da gravação com defeito), segura os dados até o relógio de parede alcançar."""
-        r = self._relogio
-        if r.maior is None or r.primeiro is None:
-            return
-        if self._ritmo0 is None:
-            self._ritmo0 = time.monotonic()
-            return
-        while not self._parar.is_set():
-            adiantado = (r.maior - r.primeiro) / 90000 - (time.monotonic() - self._ritmo0)
-            if adiantado <= 3:
-                return
-            if not self._segurou:
-                self._segurou = True
-                log.warning("⚠ A gravação estava indo mais rápido que o normal (%.0fs adiantada). Segurando "
-                            "para manter o ritmo certo na transmissão.", adiantado)
-            time.sleep(min(adiantado - 2, 1.0))
 
     def _garantir_envio(self):
         if self._conn_envio is not None:
@@ -994,6 +1311,21 @@ class Transmissao:
         if proc is not None and proc.poll() is None:
             self._escrever_stdin(proc, cmd)
 
+    def _vigiar_contador(self):
+        """Mantém o contador do vídeo em dia: reescreve o tempo e troca o fundo quando muda a fase."""
+        while not self._parar.wait(0.25):
+            try:
+                cmds = self._tela.comandos()
+            except Exception as e:
+                log.debug("contador: %s", e)
+                continue
+            if not cmds:
+                continue
+            with self._lock:
+                procs = [p for p in self._processadores.values() if p.poll() is None]
+            for p in procs:
+                self._escrever_stdin(p, "".join(cmds))
+
     def _reenviar_mudo(self, proc, seg):
         """O processador só aceita comandos depois de montar os filtros: repete o último por uns segundos."""
         for _ in range(6):
@@ -1022,6 +1354,7 @@ class Transmissao:
     def _ler_stderr_saida(self, proc, seg):
         """Registro do PROCESSADOR de um trecho (estatísticas, relógio bagunçado)."""
         vigia = VigiaRelogio(limite=12)    # "timestamp discontinuity" seguidos
+        imagem = VigiaImagem()             # erros do decodificador que não param = imagem travada
         inicio = time.monotonic()
         ultimo_stats = 0.0
         ultima = ""
@@ -1031,6 +1364,13 @@ class Transmissao:
                     if time.time() - ultimo_stats >= 2:
                         self.aviso("stats", self.resumir_stats(linha))
                         ultimo_stats = time.time()
+                elif _erro_de_imagem(linha):
+                    # um por linha encheria o registro (eram milhares por live): só no modo detalhado
+                    log.debug("saída: %s", linha)
+                    no_comeco = time.monotonic() - inicio < 8      # começar no meio do vídeo dá alguns
+                    if not no_comeco and seg == self._seg_ativo and imagem.travou():
+                        imagem.zerar()
+                        self._imagem_travada()
                 elif "timestamp discontinuity" in linha or "buffers queued" in linha:
                     # o ffmpeg está corrigindo os tempos sem parar: a live trava. Muitas seguidas = trocar
                     log.debug("saída: %s", linha)

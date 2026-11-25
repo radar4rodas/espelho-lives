@@ -114,6 +114,15 @@ def salvar_config(cfg):
     CONFIG.write_text(json.dumps(dados, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def salvar_ajuste_voz_medido(chave, ms):
+    """Guarda o ajuste que o vigia da sincronia achou (um por formato de vídeo): a próxima live com
+    vídeo do mesmo formato já começa com ele."""
+    cfg = ler_config()
+    cfg[chave] = int(ms)
+    cfg.pop("ajuste_voz_medido_ms", None)      # valor antigo, de antes de separar por formato
+    salvar_config(cfg)
+
+
 def limpar_sessionid(texto):
     """Aceita só o valor ou 'sessionid=valor; ...' copiado do navegador."""
     t = (texto or "").strip().strip('"').strip()
@@ -408,7 +417,10 @@ def status_shopee(sessao_id):
     dados = d.get("data") or {}
     s = dados.get("session") or {}
     info.update(titulo=(s.get("title") or "").strip(), usuario=s.get("username") or "",
-                nome=s.get("nickname") or "", codigo=s.get("status"))
+                nome=s.get("nickname") or "", codigo=s.get("status"),
+                # números da live (espectadores, curtidas...) para a página do celular
+                sessao_bruta={k: s.get(k) for k in ("viewer_count", "max_member_cnt", "member_cnt",
+                                                    "like_cnt", "share_cnt", "start_time")})
     urls = dados.get("play_urls") or []
     if isinstance(urls, dict):
         urls = list(urls.values())
@@ -435,6 +447,11 @@ MSG_SHOPEE_RECUSOU = (
     "a live na Shopee já foi encerrada e a chave não vale mais (a Shopee gera uma chave nova "
     "a cada live). Crie uma nova live na Shopee, copie a URL e a chave novas e clique em Iniciar de novo.")
 
+def _hms(seg):
+    seg = int(seg)
+    return f"{seg // 3600}:{seg // 60 % 60:02d}:{seg % 60:02d}"
+
+
 class Espelhador:
     """Espera a live do TikTok, retransmite para a Shopee e reconecta sozinho.
 
@@ -443,8 +460,10 @@ class Espelhador:
     """
 
     def __init__(self, cfg, ffmpeg, destino, aviso=None, sem_janela=False, preview=None,
-                 ao_encerrar_tiktok=None):
+                 ao_encerrar_tiktok=None, estado_destino=None):
         self.cfg = cfg
+        # função que devolve o status da página da live no destino (a extensão), ou None
+        self.estado_destino = estado_destino
         self.ffmpeg = ffmpeg
         self.destino = destino
         self.preview = preview
@@ -458,7 +477,27 @@ class Espelhador:
         self._link_recusado = False
         self._reiniciar = False          # a última transmissão parou para corrigir o relógio do vídeo
         self._base_gravacao = None
+        self._bases_gravadas = []        # (pasta, base) gravados nesta execução: emendados no fim
         self._tiktok_encerrou_em = None
+
+    # (eram só da reprise; o espelhamento ao vivo também usa quando a conexão cai: sem eles, a queda da Shopee
+    #  derrubava o motor com "'Espelhador' object has no attribute '_pagina_fora_do_ar'" — 23/11 17:15)
+    def _pagina_fora_do_ar(self):
+        """Se a extensão mostra a página da live mas ela não está mais ao vivo, explica o motivo."""
+        if not self.estado_destino:
+            return ""
+        try:
+            st = self.estado_destino() or {}
+        except Exception:       # noqa: BLE001
+            return ""
+        if st.get("aberto") and st.get("situacao") in ("aberto", "preparada"):
+            return ("A página da live na Shopee não está mais ao vivo: a própria Shopee encerrou a live. "
+                    "Crie uma live nova na Shopee e clique em Iniciar com a URL e a chave novas.")
+        return ""
+
+    def _msg_recusou(self):
+        pagina = self._pagina_fora_do_ar()
+        return MSG_SHOPEE_RECUSOU + ("\n   " + pagina if pagina else "")
 
     def _encerrar_shopee_ligado(self):
         return bool(self.cfg.get("encerrar_shopee") and self.ao_encerrar_tiktok)
@@ -589,6 +628,9 @@ class Espelhador:
                 msg += f"\n   Motivo: {ultimo_erro}"
             if recusas_seguidas:
                 msg += f"\n   Tentativa {recusas_seguidas} de 3. Confira se a live na Shopee está aberta e se a chave é a atual."
+            pagina = self._pagina_fora_do_ar()
+            if pagina:
+                msg += "\n   " + pagina
             self._estado("reconectando", msg, logging.WARNING)
             self._parar.wait(5 if dur > 60 else 15)
 
@@ -599,14 +641,46 @@ class Espelhador:
     def _proximo_arquivo_gravacao(self):
         base = self._base_gravacao or time.strftime("%Y-%m-%d_%Hh%M_live")
         pasta = pasta_gravacao(self.sentido)
+        if (str(pasta), base) in _juntando:   # ainda emendando a execução anterior desta live: usa outro nome
+            base += "_b"
+            self._base_gravacao = base
         caminho = pasta / f"{base}.ts"
         parte = 2
         while caminho.exists():            # a live caiu e voltou: grava a continuação em outra parte
             caminho = pasta / f"{base}_parte{parte}.ts"
             parte += 1
+        if (pasta, base) not in self._bases_gravadas:
+            self._bases_gravadas.append((pasta, base))
         return caminho
 
-    def _transmitir(self, url, cabecalhos, arquivo=None, repetir=False):
+    def juntar_gravacoes(self):
+        """Chamado quando a transmissão termina: emenda as partes de cada live gravada num vídeo só."""
+        bases, self._bases_gravadas = self._bases_gravadas, []
+        for pasta, base in bases:
+            try:
+                juntar_partes(self.ffmpeg, pasta, base)
+            except Exception as e:      # nunca pode atrapalhar o painel; as partes ficam como estão
+                log.warning("Não consegui juntar as partes da gravação %s (%s). As partes foram mantidas.", base, e)
+
+    def ajustar_voz(self, ms):
+        """Shopee -> TikTok: muda, com a live no ar, quanto a imagem é atrasada para casar com a voz.
+        ms=None: automático (valor medido)."""
+        from transmissao import ajuste_voz_efetivo
+        self.cfg["sincronia_auto"] = ms is None
+        if ms is not None:
+            self.cfg["ajuste_voz_ms"] = int(ms)
+        sessao = self._sessao
+        if sessao:
+            if ms is None:
+                log.info("🎚 Sincronia da voz automática (agora: %d ms, vídeo %s; o painel confere e corrige "
+                         "sozinho). Aplicando sem parar a live...",
+                         ajuste_voz_efetivo(self.cfg, formato=getattr(sessao, "formato_video", None)),
+                         (getattr(sessao, "formato_video", None) or "?").upper())
+            else:
+                log.info("🎚 Sincronia da voz: imagem atrasada em %d ms. Aplicando sem parar a live...", int(ms))
+            sessao.reaplicar("ajuste da sincronia da voz")
+
+    def _transmitir(self, url, cabecalhos, arquivo=None, repetir=False, inicio=0.0):
         from transmissao import Transmissao
         gravar_em = renovar = None
         if self.cfg.get("gravar") and not arquivo:
@@ -616,7 +690,8 @@ class Espelhador:
             renovar = lambda: obter_stream(usuario, sessionid)    # link novo para trocar sem parar
         sessao = Transmissao(self.cfg, self.ffmpeg, url, cabecalhos, self.destino, self.preview,
                              aviso=self.aviso, sem_janela=self.sem_janela, resumir_stats=resumir_stats,
-                             arquivo=arquivo, repetir=repetir, gravar_em=gravar_em, renovar=renovar)
+                             arquivo=arquivo, repetir=repetir, gravar_em=gravar_em, renovar=renovar,
+                             inicio=inicio)
         self._sessao = sessao
         self._shopee_recusou = False
         self._link_recusado = False
@@ -632,6 +707,8 @@ class Espelhador:
             self._shopee_recusou = sessao.shopee_recusou
             self._link_recusado = sessao.link_recusado
             self._reiniciar = sessao.precisa_reiniciar
+            self._posicao_queda = sessao.posicao_ao_cair
+            self._voltas = sessao.voltas
             self._sessao = None
 
 
@@ -641,10 +718,15 @@ class Reprisador(Espelhador):
     onde_destino = "na Shopee"
     alarme_fim = "tempo_shopee"
 
-    def __init__(self, cfg, ffmpeg, destino, arquivo, repetir=True, limite_seg=0, ao_acabar_tempo=None, **kw):
+    def __init__(self, cfg, ffmpeg, destino, arquivo, repetir=True, limite_seg=0, ao_acabar_tempo=None,
+                 estado_destino=None, **kw):
         """limite_seg: em loop, por quanto tempo a reprise fica no ar (0 = até clicar em Parar).
-        ao_acabar_tempo: função que encerra a live no destino quando o tempo acaba (a extensão), ou None."""
+        ao_acabar_tempo: função que encerra a live no destino quando o tempo acaba (a extensão), ou None.
+        estado_destino: função que devolve o status da página da live (a extensão), ou None."""
         super().__init__(cfg, ffmpeg, destino, **kw)
+        self.estado_destino = estado_destino
+        self._retomar_em = 0.0          # depois de uma queda, continua deste ponto do vídeo
+        self._posicao_queda = None
         self.arquivo = Path(arquivo)
         self.repetir = repetir
         self.limite_seg = max(0, int(limite_seg or 0)) if repetir else 0
@@ -700,23 +782,42 @@ class Reprisador(Espelhador):
                                    f"{self.onde_destino} agora.", logging.WARNING)
         self.aviso("alarme", self.alarme_fim)
 
+    # -------------------------------------------------------- retomada após queda
+
+    def _guardar_ponto(self, dur):
+        """Depois de uma queda no meio da reprise, a próxima tentativa continua de onde a Shopee parou
+        (um pouco antes, para ninguém perder nada) em vez de voltar ao começo do vídeo."""
+        if self._shopee_recusou and dur < 60:
+            return                                  # recusou logo no início: mantém o mesmo ponto
+        pos = self._posicao_queda
+        if self._retomar_em and dur < 15 and not self._shopee_recusou:
+            self._retomar_em = 0.0                  # o ponto ficou além do fim do vídeo: recomeça
+        elif pos is not None and dur >= 15:
+            self._retomar_em = max(0.0, pos - 5)
+
     def executar(self):
         nome = self.arquivo.name
         self._ligar_cronometro()
         recusas_seguidas = 0
         while not self._parar.is_set():
-            self._estado("reprise", f"Reprisando {nome} ({self._jeito()}) na Shopee...")
+            if self._retomar_em:
+                self._estado("reprise", f"Reprisando {nome} ({self._jeito()}) na Shopee, continuando de "
+                                        f"{_hms(self._retomar_em)} do vídeo...")
+            else:
+                self._estado("reprise", f"Reprisando {nome} ({self._jeito()}) na Shopee...")
             inicio = time.time()
-            ultimo_erro = self._transmitir(None, {}, arquivo=self.arquivo, repetir=self.repetir)
+            ultimo_erro = self._transmitir(None, {}, arquivo=self.arquivo, repetir=self.repetir,
+                                           inicio=self._retomar_em)
             if self._parar.is_set():
                 break
             dur = int(time.time() - inicio)
+            self._guardar_ponto(dur)
             if self._shopee_recusou and dur < 60:
                 recusas_seguidas += 1
             else:
                 recusas_seguidas = 0
             if recusas_seguidas >= 3:
-                self._estado("parado", MSG_SHOPEE_RECUSOU, logging.ERROR)
+                self._estado("parado", self._msg_recusou(), logging.ERROR)
                 self._parar.set()
                 return
             if not self.repetir and not self._shopee_recusou:
@@ -730,6 +831,9 @@ class Reprisador(Espelhador):
                 msg += f"\n   Motivo: {ultimo_erro}"
             if recusas_seguidas:
                 msg += f"\n   Tentativa {recusas_seguidas} de 3. Confira se a live na Shopee está aberta e se a chave é a atual."
+            pagina = self._pagina_fora_do_ar()
+            if pagina:
+                msg += "\n   " + pagina
             self._estado("reconectando", msg, logging.WARNING)
             self._parar.wait(5 if dur > 60 else 15)
         if self._tempo_acabou:
@@ -746,7 +850,13 @@ class EspelhadorShopee(Espelhador):
     """
 
     sentido = "st"      # pasta de gravação: Shopee -> TikTok
-    SEG_PAUSA = 5       # sem vídeo da Shopee por este tempo = live pausada
+    SEG_PAUSA = 5       # sem vídeo da Shopee por este tempo = live pausada (se a Shopee confirmar)
+    # A imagem pode parar de chegar por alguns segundos por falha de conexão, com a live NO AR na Shopee.
+    # Isso não é pausa: reconecta sem mexer no TikTok. Só depois deste tempo sem imagem vira "pausa".
+    SEG_TRAVADA_MAX = 30
+    # Pausa de verdade: só encerra a live no TikTok depois de ~este tempo sem imagem (antes eram ~7 s, e quedas
+    # de conexão de 6 a 11 s encerravam o TikTok à toa — 23/11 09:43 e 11:16).
+    ESPERA_ENCERRAR = 30
 
     def __init__(self, cfg, ffmpeg, sessao_id, controle_tiktok=None, **kw):
         """controle_tiktok: objeto com tiktok_pausar(), tiktok_retomar() e tiktok_encerrar() (a extensão),
@@ -760,6 +870,9 @@ class EspelhadorShopee(Espelhador):
         self._ultimo_dado = None        # último momento em que chegou vídeo da Shopee
         self._shopee_pausada = False
         self._vigia_pausa = None
+        self._tiktok_pausado = False    # a extensão pausou a live no TikTok (Shopee pausada)
+        self._vez_pausa = 0             # muda a cada pausa/volta: cancela uma ação do TikTok que ficou velha
+        self._lock_tiktok = threading.Lock()
 
     def _link_novo(self):
         """Link novo da mesma live da Shopee (para trocar a conexão sem parar), ou None."""
@@ -781,11 +894,73 @@ class EspelhadorShopee(Espelhador):
             log.error("⚠ Não consegui %s a live no TikTok: %s", nome, r.get("detalhe") or r.get("erro"))
         return r
 
+    def _tiktok_depois(self, espera, vez, pausar):
+        """Shopee pausou: ENCERRA a live no TikTok daqui a `espera` s (quando o atraso termina de sair),
+        se ela continuar pausada. Shopee voltou: retoma a live no TikTok, se ela tiver ficado só pausada."""
+        if self._parar.wait(max(0.0, espera)):
+            return
+        with self._lock_tiktok:
+            if vez != self._vez_pausa or self._shopee_acabou:
+                return
+            if pausar and self._shopee_pausada:
+                # confere de novo, na hora, antes de encerrar: a imagem voltou? a Shopee diz que a live continua?
+                if self._ultimo_dado is not None and time.monotonic() - self._ultimo_dado < 3:
+                    return
+                situacao, _ = status_shopee(self.sessao_id)
+                if vez != self._vez_pausa or not self._shopee_pausada:
+                    return
+                if situacao in ("ao_vivo", "erro"):
+                    sem = time.monotonic() - self._ultimo_dado if self._ultimo_dado else 0
+                    log.warning("⚠ A imagem da Shopee não chega há %.0fs, mas %s. NÃO encerrei a live no TikTok "
+                                "(ela mostra a imagem 'Já voltamos'). Confira a live da Shopee.", sem,
+                                "a Shopee diz que a live continua no ar" if situacao == "ao_vivo"
+                                else "não consegui confirmar com a Shopee se ela pausou")
+                    return
+                log.info("⏹ A live pausou na Shopee: encerrando a live no TikTok...")
+                r = self._acao_tiktok("encerrar", "tiktok_encerrar")
+                if r.get("ok"):
+                    self._shopee_acabou = True          # não volta mais: o TikTok foi encerrado
+                    self._estado("parado", "A live pausou na Shopee e a live no TikTok foi encerrada.")
+                    self._parar.set()
+                    s = self._sessao
+                    if s is not None:
+                        s.parar()
+                    return
+                # não deu para encerrar: pausa (volta sozinha se a Shopee voltar) e avisa
+                if not self._tiktok_pausado:
+                    p = self._acao_tiktok("pausar", "tiktok_pausar")
+                    self._tiktok_pausado = bool(p.get("ok"))
+                log.warning("⚠ Não consegui encerrar a live no TikTok. %s ENCERRE A LIVE NO TIKTOK agora "
+                            "(Gerenciador de LIVE).", "Deixei ela PAUSADA." if self._tiktok_pausado
+                            else "Ela está mostrando a imagem 'Já voltamos'.")
+                self.aviso("alarme", "finalizar_tiktok")
+            elif not pausar and not self._shopee_pausada and self._tiktok_pausado:
+                self._acao_tiktok("retomar", "tiktok_retomar")
+                self._tiktok_pausado = False
+
+    def _agendar_tiktok(self, pausar):
+        if not self.tiktok:
+            return
+        self._vez_pausa += 1
+        atraso = float(self.cfg.get("atraso_seg", 7))
+        if pausar:
+            # espera a pausa se confirmar (~ESPERA_ENCERRAR s sem imagem) antes de encerrar o TikTok
+            espera = max(atraso - self.SEG_PAUSA + 0.5, self.ESPERA_ENCERRAR - self.SEG_PAUSA)
+        else:
+            # o vídeo novo volta no TikTok depois do atraso: retoma um pouco antes, para não perder nada
+            espera = atraso - 1.5
+        from transmissao import nome_thread
+        threading.Thread(target=self._tiktok_depois, args=(espera, self._vez_pausa, pausar), daemon=True,
+                         name=nome_thread("tiktok")).start()
+
     def _vigiar_pausa(self):
-        """Sem vídeo da Shopee por 5 s = pausa. O Gerenciador de LIVE do TikTok (na web) não tem botão de
-        pausar, então o envio para o OBS é fechado depois que o atraso termina de sair e o OBS mostra a
-        imagem "Já voltamos" (fica atrás do vídeo). Quando a Shopee volta, o vídeo volta por cima dela."""
+        """Sem vídeo da Shopee por 5 s = pausa. O envio para o OBS é fechado depois que o atraso termina de
+        sair e o OBS mostra a imagem "Já voltamos" (fica atrás do vídeo). Com a extensão, a live no TikTok
+        também é pausada nessa hora (o Gerenciador na web não tem botão de pausar: a extensão desliga a câmera
+        e o som da conexão da live) e retomada quando o vídeo da Shopee volta."""
         ultimo_reinicio = 0.0
+        ultima_troca = 0.0              # última reconexão por imagem travada (live no ar na Shopee)
+        avisou_travada = False
         while not self._parar.is_set():
             s = self._sessao
             if s is not None and s.ultimo_dado:
@@ -797,19 +972,43 @@ class EspelhadorShopee(Espelhador):
                     situacao, info = status_shopee(self.sessao_id)
                     if situacao == "fora_do_ar" and info.get("codigo") == 2:
                         pass        # acabou de vez: o fim da live cuida disso
+                    elif situacao in ("ao_vivo", "erro") and parado < self.SEG_TRAVADA_MAX:
+                        # a Shopee diz que a live continua (ou não respondeu): é a IMAGEM que parou de chegar,
+                        # não uma pausa. Reconecta sem parar e sem mexer na live do TikTok.
+                        if s is not None and time.monotonic() - ultima_troca >= 10:
+                            ultima_troca = time.monotonic()
+                            if not avisou_travada:
+                                avisou_travada = True
+                                log.warning("📶 A imagem da Shopee parou de chegar há %.0fs, mas %s. Reconectando "
+                                            "sem encerrar a live no TikTok...", parado,
+                                            "a live continua no ar na Shopee" if situacao == "ao_vivo"
+                                            else "a Shopee não confirmou pausa")
+                            s.reaplicar("a imagem da Shopee parou de chegar")
                     elif time.monotonic() - self._ultimo_dado >= self.SEG_PAUSA:
-                        log.info("⏸ A live parou na Shopee (sem vídeo há %.0fs). O TikTok mostra a imagem "
-                                 "'Já voltamos' até ela voltar.", parado)
+                        if self.tiktok:
+                            falta = self.ESPERA_ENCERRAR - parado
+                            log.info("⏸ A live parou na Shopee (sem vídeo há %.0fs). %s", parado,
+                                     f"Se não voltar em ~{falta:.0f}s, a live no TikTok é encerrada." if falta >= 2 else
+                                     "Antes de encerrar a live no TikTok, confiro com a Shopee se ela pausou mesmo.")
+                        else:
+                            log.info("⏸ A live parou na Shopee (sem vídeo há %.0fs). O TikTok mostra a imagem "
+                                     "'Já voltamos' até ela voltar.", parado)
                         self.aviso("pausa", "shopee")
                         self._shopee_pausada = True
+                        self._agendar_tiktok(pausar=True)
                         ultimo_reinicio = time.monotonic()
                         s = self._sessao
                         if s is not None:
                             s.terminar_entrada()    # o que está no atraso termina de sair e entra a imagem
+                elif not self._shopee_pausada and parado < 1.5 and avisou_travada:
+                    avisou_travada = False
+                    log.info("✅ A imagem da Shopee voltou. A live no TikTok seguiu no ar.")
                 elif self._shopee_pausada and parado < 1.5:
+                    avisou_travada = False
                     atraso = float(self.cfg.get("atraso_seg", 7))
                     log.info("▶ A live voltou na Shopee. O vídeo volta no TikTok em ~%.0fs (atraso).", atraso)
                     self._shopee_pausada = False
+                    self._agendar_tiktok(pausar=False)
                     self.aviso("pausa", "fim")
                     self.aviso("ao_vivo", "A live voltou na Shopee. Enviando para o OBS → TikTok...")
                 elif (self._shopee_pausada and s is not None and parado >= 12
@@ -838,12 +1037,19 @@ class EspelhadorShopee(Espelhador):
     def _fim_da_live(self, nome):
         if self.tiktok:
             log.info("Encerrando a live no TikTok...")
-            r = self._acao_tiktok("encerrar", "tiktok_encerrar")
-            if r.get("ok"):
-                self._estado("parado", f"A live de {nome} acabou na Shopee e a live no TikTok foi encerrada.")
-                self._parar.set()
-                return
-        self._estado("parado", f"⚠ A live de {nome} acabou na Shopee e o envio para o TikTok parou. "
+            with self._lock_tiktok:
+                self._vez_pausa += 1
+                r = self._acao_tiktok("encerrar", "tiktok_encerrar")
+                if r.get("ok"):
+                    self._estado("parado", f"A live de {nome} acabou na Shopee e a live no TikTok foi encerrada.")
+                    self._parar.set()
+                    return
+                # não deu para encerrar: pelo menos pausa, para não ficar no ar com a imagem parada
+                if not self._tiktok_pausado:
+                    p = self._acao_tiktok("pausar", "tiktok_pausar")
+                    self._tiktok_pausado = bool(p.get("ok"))
+        pausei = " Deixei a live no TikTok PAUSADA, mas" if self._tiktok_pausado else ""
+        self._estado("parado", f"⚠ A live de {nome} acabou na Shopee e o envio para o TikTok parou.{pausei} "
                                "ENCERRE A LIVE NO TIKTOK agora (Gerenciador de LIVE), para não ficar tela preta.",
                      logging.WARNING)
         self.aviso("alarme", "finalizar_tiktok")
@@ -894,15 +1100,18 @@ class EspelhadorShopee(Espelhador):
                 return
 
             if not esteve_no_ar or self._base_gravacao is None:
-                self._base_gravacao = time.strftime("%Y-%m-%d_%Hh%M_shopee_") + re.sub(
-                    r"[^A-Za-z0-9._-]", "", info.get("usuario") or str(self.sessao_id))
+                # a mesma live da Shopee (mesmo link) iniciada de novo continua no mesmo vídeo
+                self._base_gravacao = _bases_shopee.get(str(self.sessao_id)) or (
+                    time.strftime("%Y-%m-%d_%Hh%M_shopee_") + re.sub(
+                        r"[^A-Za-z0-9._-]", "", info.get("usuario") or str(self.sessao_id)))
+                _bases_shopee[str(self.sessao_id)] = self._base_gravacao
             if not esteve_no_ar:
                 titulo = f" ({info['titulo']})" if info.get("titulo") else ""
                 log.info("Live da Shopee encontrada: %s%s.", nome, titulo)
                 if self._vigia_pausa is None:
                     if self.tiktok:
-                        log.info("Se a Shopee pausar, o TikTok mostra a imagem 'Já voltamos' (%ds depois); "
-                                 "se a Shopee acabar, a live no TikTok é encerrada sozinha.", self.SEG_PAUSA)
+                        log.info("Se a live da Shopee acabar ou ficar pausada por ~%ds, a live no TikTok é "
+                                 "encerrada sozinha (falha rápida de conexão não encerra).", self.ESPERA_ENCERRAR)
                     from transmissao import nome_thread
                     self._vigia_pausa = threading.Thread(target=self._vigiar_pausa, daemon=True,
                                                          name=nome_thread("pausa"))
@@ -955,12 +1164,13 @@ class EspelhadorShopee(Espelhador):
             self._parar.wait(3)
         self._estado("parado", "Envio para o TikTok encerrado.")
 
-    def _transmitir(self, url, cabecalhos, arquivo=None, repetir=False):
+    def _transmitir(self, url, cabecalhos, arquivo=None, repetir=False, inicio=0.0):
         from transmissao import Transmissao
         gravar_em = self._proximo_arquivo_gravacao if self.cfg.get("gravar") else None
         sessao = Transmissao(self.cfg, self.ffmpeg, url, cabecalhos, self.destino, self.preview,
                              aviso=self.aviso, sem_janela=self.sem_janela, resumir_stats=resumir_stats,
-                             gravar_em=gravar_em, renovar=self._link_novo, silencioso=self._shopee_pausada)
+                             gravar_em=gravar_em, renovar=self._link_novo, silencioso=self._shopee_pausada,
+                             salvar_ajuste_voz=salvar_ajuste_voz_medido)
         self._sessao = sessao
         self._shopee_recusou = False
         self._link_recusado = False
@@ -975,6 +1185,8 @@ class EspelhadorShopee(Espelhador):
             self._shopee_recusou = sessao.shopee_recusou
             self._link_recusado = sessao.link_recusado
             self._reiniciar = sessao.precisa_reiniciar
+            self._posicao_queda = sessao.posicao_ao_cair
+            self._voltas = sessao.voltas
             self._sessao = None
 
 
@@ -1001,12 +1213,15 @@ class ReprisadorTikTok(Reprisador):
             if erro_obs:
                 self._estado("parado", erro_obs, logging.ERROR)
                 return
-            self._estado("reprise", f"Reprisando {nome} ({self._jeito()}) no TikTok pelo OBS...")
+            extra = f", continuando de {_hms(self._retomar_em)} do vídeo" if self._retomar_em else ""
+            self._estado("reprise", f"Reprisando {nome} ({self._jeito()}) no TikTok pelo OBS{extra}...")
             inicio = time.time()
-            ultimo_erro = self._transmitir(None, {}, arquivo=self.arquivo, repetir=self.repetir)
+            ultimo_erro = self._transmitir(None, {}, arquivo=self.arquivo, repetir=self.repetir,
+                                           inicio=self._retomar_em)
             if self._parar.is_set():
                 break
             dur = int(time.time() - inicio)
+            self._guardar_ponto(dur)
             falhas = falhas + 1 if (self._shopee_recusou and dur < 60) else 0
             if falhas >= 3:
                 self._estado("parado", "O OBS recusou o vídeo 3 vezes seguidas. Feche o OBS e clique em "
@@ -1033,6 +1248,106 @@ class ReprisadorTikTok(Reprisador):
 
 EXTENSOES_VIDEO = {".ts", ".mp4", ".flv", ".mov", ".mkv", ".m4v", ".webm"}
 _duracoes = {}
+SUFIXO_JUNTANDO = "_juntando.ts"   # arquivo temporário enquanto as partes são emendadas
+_juntando = set()                  # (pasta, base) sendo emendados agora (somem da lista de reprise)
+_bases_shopee = {}                 # live da Shopee (sessão) -> nome do vídeo (reiniciar continua no mesmo)
+_lock_juntar = threading.Lock()
+
+
+def _partes_da_base(pasta, base):
+    """base.ts, base_parte2.ts, base_parte3.ts... na ordem em que foram gravados."""
+    partes = []
+    padrao = re.compile(re.escape(base) + r"_parte(\d+)\.ts$")
+    for p in Path(pasta).iterdir():
+        if p.name == f"{base}.ts":
+            partes.append((1, p))
+        else:
+            m = padrao.fullmatch(p.name)
+            if m:
+                partes.append((int(m.group(1)), p))
+    return [p for _, p in sorted(partes)]
+
+
+def _codecs(ffprobe, arquivo):
+    r = subprocess.run([ffprobe, "-v", "error", "-show_entries", "stream=codec_type,codec_name",
+                        "-of", "csv=p=0", str(arquivo)], capture_output=True, text=True, timeout=30,
+                       creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+    return sorted(set(l.strip() for l in r.stdout.splitlines() if l.strip()))
+
+
+def juntar_partes(ffmpeg, pasta, base):
+    """Emenda base.ts + base_parte2.ts + ... num vídeo só (base.ts), sem recodificar.
+    As partes só são apagadas depois que o vídeo emendado fica pronto e conferido; se algo der errado,
+    elas ficam como estavam."""
+    pasta = Path(pasta)
+    chave = (str(pasta), base)
+    with _lock_juntar:
+        _juntando.add(chave)
+        try:
+            # espera os arquivos pararem de crescer (a gravação acabou de fechar)
+            for _ in range(30):
+                partes = _partes_da_base(pasta, base)
+                if not partes or all(time.time() - p.stat().st_mtime > 3 for p in partes):
+                    break
+                time.sleep(1)
+            partes = [p for p in _partes_da_base(pasta, base) if p.stat().st_size > 0]
+            if len(partes) < 2:
+                return
+            total = sum(p.stat().st_size for p in partes)
+            livre = shutil.disk_usage(pasta).free
+            if livre < total * 1.05 + 200_000_000:
+                log.warning("💾 Sem espaço no disco para juntar as %d partes de %s (precisa de %.1f GB livres). "
+                            "As partes foram mantidas.", len(partes), base, total * 1.05 / 1e9 + 0.2)
+                return
+            ffprobe = _ffprobe()
+            if ffprobe:
+                tipos = {p.name: _codecs(ffprobe, p) for p in partes}
+                if len(set(map(tuple, tipos.values()))) > 1:
+                    log.warning("💾 As partes de %s têm formatos de vídeo diferentes (%s); não dá para emendar "
+                                "sem perder qualidade. As partes foram mantidas.",
+                                base, "; ".join(f"{n}: {', '.join(c)}" for n, c in tipos.items()))
+                    return
+            log.info("💾 Juntando as %d partes da gravação %s num vídeo só...", len(partes), base)
+            temp = pasta / f"{base}{SUFIXO_JUNTANDO}"
+            lista = pasta / f"{base}_lista.txt"
+            lista.write_text("".join("file '" + str(p).replace("'", r"'\''") + "'\n" for p in partes),
+                             encoding="utf-8")
+            try:
+                r = subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+                                    "-f", "concat", "-safe", "0", "-i", str(lista),
+                                    "-map", "0", "-c", "copy", "-f", "mpegts", str(temp)],
+                                   capture_output=True, text=True, timeout=3 * 3600,
+                                   creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+            finally:
+                try:
+                    lista.unlink()
+                except OSError:
+                    pass
+            tamanho = temp.stat().st_size if temp.exists() else 0
+            if r.returncode != 0 or tamanho < total * 0.9:
+                erro = (r.stderr or "").strip().splitlines()[-1:] or [f"código {r.returncode}"]
+                log.warning("💾 Não consegui juntar as partes de %s (%s). As partes foram mantidas.", base, erro[0])
+                try:
+                    temp.unlink()
+                except OSError:
+                    pass
+                return
+            for p in partes:
+                p.unlink()
+            temp.rename(pasta / f"{base}.ts")
+            log.info("💾 Gravação salva num vídeo só: %s (%.1f GB, %d partes emendadas).",
+                     f"{base}.ts", tamanho / 1e9, len(partes))
+        finally:
+            _juntando.discard(chave)
+
+
+def _sendo_juntado(pasta, nome):
+    if nome.endswith(SUFIXO_JUNTANDO):
+        return True
+    for p, base in list(_juntando):
+        if p == str(pasta) and (nome == f"{base}.ts" or re.fullmatch(re.escape(base) + r"_parte\d+\.ts", nome)):
+            return True
+    return False
 
 
 def _ffprobe(cfg=None):
@@ -1050,7 +1365,8 @@ def listar_gravacoes(sentido="ts"):
     pasta.mkdir(parents=True, exist_ok=True)
     ffprobe = _ffprobe()
     itens = []
-    arquivos = [p for p in pasta.iterdir() if p.is_file() and p.suffix.lower() in EXTENSOES_VIDEO]
+    arquivos = [p for p in pasta.iterdir() if p.is_file() and p.suffix.lower() in EXTENSOES_VIDEO
+                and not _sendo_juntado(pasta, p.name)]
     for p in sorted(arquivos, key=lambda x: x.stat().st_mtime, reverse=True):
         st = p.stat()
         gravando = time.time() - st.st_mtime < 10
@@ -1077,7 +1393,7 @@ def caminho_gravacao(nome, sentido="ts"):
     if not nome or Path(nome).name != nome or nome.startswith("."):
         return None
     p = pasta_gravacao(sentido) / nome
-    if not p.is_file() or p.suffix.lower() not in EXTENSOES_VIDEO:
+    if not p.is_file() or p.suffix.lower() not in EXTENSOES_VIDEO or _sendo_juntado(p.parent, nome):
         return None
     return p
 
@@ -1125,6 +1441,7 @@ def main():
         print()
         esp.parar()
         log.info("Encerrado.")
+    esp.juntar_gravacoes()
 
 
 if __name__ == "__main__":

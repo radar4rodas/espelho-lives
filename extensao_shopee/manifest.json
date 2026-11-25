@@ -1,25 +1,70 @@
 {
   "manifest_version": 3,
   "name": "Espelho de Live - Finalizar Shopee",
-  "version": "1.3",
-  "description": "Finaliza a transmissÃ£o na Shopee Live e pausa/encerra a live no Gerenciador de LIVE do TikTok Shop quando o painel Espelho de Live pede. SÃ³ funciona com o painel aberto neste computador.",
+  "version": "1.13",
+  "description": "Finaliza a transmissão na Shopee Live e pausa/encerra a live no Gerenciador de LIVE do TikTok Shop quando o painel Espelho de Live pede, e avisa o painel se aparecer um aviso de restrição. Só funciona com o painel aberto neste computador.",
   "minimum_chrome_version": "116",
-  "background": { "service_worker": "background.js" },
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
-      "matches": ["https://live.shopee.com.br/*"],
-      "js": ["content.js"],
+      "matches": [
+        "https://live.shopee.com.br/*"
+      ],
+      "js": [
+        "content.js",
+        "comentarios.js",
+        "avisos.js"
+      ],
       "run_at": "document_idle",
       "all_frames": true
     },
     {
-      "matches": ["https://shop.tiktok.com/*"],
-      "js": ["content_tiktok.js"],
+      "matches": [
+        "https://shop.tiktok.com/*"
+      ],
+      "js": [
+        "audio_puro_tiktok.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://shop.tiktok.com/*"
+      ],
+      "js": [
+        "pausa_tiktok.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://shop.tiktok.com/*"
+      ],
+      "js": [
+        "content_tiktok.js",
+        "comentarios.js",
+        "avisos.js"
+      ],
       "run_at": "document_idle",
       "all_frames": true
     }
   ],
-  "permissions": ["scripting"],
-  "host_permissions": ["https://live.shopee.com.br/*", "https://shop.tiktok.com/*"],
-  "icons": { "16": "icone16.png", "48": "icone48.png", "128": "icone128.png" }
+  "permissions": [
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://live.shopee.com.br/*",
+    "https://shop.tiktok.com/*"
+  ],
+  "icons": {
+    "16": "icone16.png",
+    "48": "icone48.png",
+    "128": "icone128.png"
+  }
 }

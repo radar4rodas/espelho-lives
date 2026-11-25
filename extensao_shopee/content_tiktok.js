@@ -1,7 +1,10 @@
 // Roda no Gerenciador de LIVE do TikTok Shop (shop.tiktok.com), inclusive em quadros embutidos.
 // - Conta para a extensão se a live está no ar e se existe botão de pausar.
 // - Quando o painel manda: pausa, retoma ou encerra a live (clica no botão e confirma a janelinha).
+//   Sem botão de pausar (o Gerenciador na web não tem), a pausa desliga a câmera e o som da conexão
+//   da live (pausa_tiktok.js, no mundo da página) e a retomada religa as mesmas trilhas.
 // - "diagnóstico": lista os botões visíveis, para ajustar os textos se o TikTok mudar a página.
+// - Lê da página os números da live (espectadores atuais, quem entrou, tempo no ar) para o celular.
 
 if (!globalThis.__espelhoLiveCarregado) {
 globalThis.__espelhoLiveCarregado = true;
@@ -56,16 +59,92 @@ function situacao() {
   if (ini.length) return "preparada";
   return "outra";
 }
+// pausa_tiktok.js (mundo da página) conta as conexões com envio de vídeo/som em <html data-espelho-envio>
+const temEnvio = () => Number(document.documentElement.dataset.espelhoEnvio || 0) > 0;
+const envioPausado = () => document.documentElement.dataset.espelhoPausado === "1";
+let pedidos = 0;
+function pedirPagina(pedido, ms = 4000) {
+  return new Promise((resolve) => {
+    const id = `espelho-${Date.now()}-${++pedidos}`;
+    const fim = setTimeout(() => { window.removeEventListener("message", ouvir); resolve({ ok: false, erro: "sem resposta" }); }, ms);
+    function ouvir(ev) {
+      if (ev.source !== window || !ev.data || ev.data.espelhoResposta !== id) return;
+      clearTimeout(fim); window.removeEventListener("message", ouvir); resolve(ev.data);
+    }
+    window.addEventListener("message", ouvir);
+    window.postMessage({ espelhoPedido: pedido, id }, "*");
+  });
+}
+
+// ---- números da live lidos da própria página (para o celular): "Espectadores atuais",
+// quem "acabou de entrar" (quadro Atividade) e o contador de tempo no ar
+const RE_ESPECT = /^(espectadores atuais|current viewers)$/i;
+const RE_ENTROU = /acab(ou|aram) de entrar|just joined/i;
+let rotuloEspect = null;        // guarda o rótulo achado, para não varrer a página toda a cada mudança
+let entradasVistas = 0;         // pessoas que entraram desde que a página abriu (sobe sem parar)
+
+function lerNumero(t) {
+  const m = String(t).replace(/\s+/g, " ").match(/(\d[\d.,]*)\s*(mil|k|mi|m)?(?![\w])/i);
+  if (!m) return null;
+  const suf = (m[2] || "").toLowerCase();
+  const mult = suf === "mil" || suf === "k" ? 1000 : suf === "mi" || suf === "m" ? 1e6 : 1;
+  const n = mult > 1 ? parseFloat(m[1].replace(/\./g, "").replace(",", ".")) : parseInt(m[1].replace(/[.,]/g, ""), 10);
+  return Number.isFinite(n) ? Math.round(n * mult) : null;
+}
+function espectadores() {
+  if (!rotuloEspect || !rotuloEspect.isConnected || !RE_ESPECT.test((rotuloEspect.textContent || "").trim())) {
+    rotuloEspect = null;
+    for (const el of document.querySelectorAll("div,span,p")) {
+      if (el.children.length === 0 && RE_ESPECT.test((el.textContent || "").trim())) { rotuloEspect = el; break; }
+    }
+  }
+  if (!rotuloEspect || !visivel(rotuloEspect)) return null;
+  const rotulo = (rotuloEspect.textContent || "").trim();
+  // sobe até 3 níveis, só enquanto ainda é o "cartão" pequeno do número (não o quadro com todos os cartões)
+  let cartao = rotuloEspect.parentElement;
+  for (let i = 0; cartao && i < 3; i++, cartao = cartao.parentElement) {
+    const texto = (cartao.innerText || "").replace(rotulo, "");
+    if (texto.length > 40) break;
+    const n = lerNumero(texto);
+    if (n !== null) return n;
+  }
+  return null;
+}
+function contarEntrou(texto) {
+  const m = texto.match(/\be\s+(\d+)\s+(outr|pessoa)|\band\s+(\d+)\s+other/i);
+  return 1 + (m ? Number(m[1] || m[3]) : 0);
+}
+new MutationObserver((mudancas) => {
+  for (const m of mudancas) for (const n of m.addedNodes) {
+    if (n.nodeType !== 1) continue;
+    const t = n.textContent || "";
+    if (t.length > 120 || !RE_ENTROU.test(t)) continue;   // uma linha só (não a lista inteira desenhada de uma vez)
+    entradasVistas += contarEntrou(t);
+  }
+}).observe(document.documentElement, { subtree: true, childList: true });
+
+function segundosNoAr() {
+  const c = contadorVisivel();
+  if (!c) return null;
+  const [h, m, s] = c.textContent.trim().split(":").map(Number);
+  return h * 3600 + m * 60 + s;
+}
+function numeros() {
+  const esp = espectadores();
+  if (esp === null && !entradasVistas) return null;
+  return { espectadores: esp, entradas: entradasVistas, no_ar_seg: segundosNoAr() };
+}
+
 function estado() {
-  return { tipo: "estado", site: "tiktok", situacao: situacao(), tem_pausa: achar(RE_PAUSAR).length > 0,
-           titulo: document.title, principal: window.top === window };
+  return { tipo: "estado", site: "tiktok", situacao: situacao(), tem_pausa: achar(RE_PAUSAR).length > 0 || temEnvio(),
+           titulo: document.title, principal: window.top === window, numeros: numeros() };
 }
 globalThis.__espelhoEstado = estado;
 
 let ultimo = "";
 function reportar(forcar) {
   const e = estado();
-  const k = e.situacao + "|" + e.tem_pausa;
+  const k = e.situacao + "|" + e.tem_pausa + "|" + (e.numeros ? e.numeros.espectadores + "|" + e.numeros.entradas : "");
   if (!forcar && k === ultimo) return;
   ultimo = k;
   try { chrome.runtime.sendMessage(e).catch(() => {}); } catch (_) {}
@@ -184,6 +263,25 @@ chrome.runtime.onMessage.addListener((msg, _remetente, responder) => {
                              (e) => responder({ ok: false, detalhe: String(e) }));
     return true;   // resposta assíncrona
   }
+  // pausar sem botão: desliga câmera e som da conexão da live (só responde o quadro que tem a conexão)
+  if (msg.tipo === "tiktok_pausar" && !achar(RE_PAUSAR).length && temEnvio()) {
+    pedirPagina("pausar_envio").then((r) => responder(r.ok
+      ? { ok: true, detalhe: r.ja ? "A live no TikTok já estava pausada."
+          : `Live pausada no TikTok: a imagem e o som pararam de ir para o TikTok (${r.trilhas} trilhas). A conexão continua aberta.` }
+      : { ok: false, detalhe: "Não consegui pausar o envio para o TikTok" + (r.erro ? ` (${r.erro}).` : "."), botoes: diagnostico() }));
+    return true;
+  }
+  if (msg.tipo === "tiktok_retomar" && envioPausado()) {
+    pedirPagina("retomar_envio").then(async (r) => {
+      // se o TikTok mostrar um botão de retomar depois da pausa, clica nele também
+      let extra = "";
+      const btn = await esperar(() => achar(RE_RETOMAR).length ? true : null, 2500);
+      if (btn) { const c = await clicarEConfirmar(RE_RETOMAR, "Live retomada"); if (c && c.ok) extra = " Cliquei em 'Retomar'."; }
+      responder(r.ok ? { ok: true, detalhe: `Live retomada no TikTok: a imagem e o som voltaram (${r.trilhas} trilhas).${extra}` }
+                     : { ok: false, detalhe: "Não consegui religar a imagem e o som da live no TikTok. Confira a aba do TikTok." });
+    });
+    return true;
+  }
   if (acoes[msg.tipo]) {
     const [re, nome] = acoes[msg.tipo];
     if (!achar(re).length) {
@@ -204,8 +302,10 @@ chrome.runtime.onMessage.addListener((msg, _remetente, responder) => {
   if (msg.tipo === "tiktok_diagnostico") {
     if (window.top !== window) return false;
     const c = contadorVisivel();
-    responder({ ok: true, situacao: situacao(), tem_pausa: achar(RE_PAUSAR).length > 0, botoes: diagnostico(),
+    responder({ ok: true, situacao: situacao(), tem_pausa: achar(RE_PAUSAR).length > 0 || temEnvio(), botoes: diagnostico(),
+                envio: Number(document.documentElement.dataset.espelhoEnvio || 0),
                 encerrar: !!iconeEncerrar(), contador: c ? c.textContent.trim() : "",
+                avisos: !!globalThis.__espelhoAvisosCarregado,
                 detalhe: "Botões lidos." });
   }
   return false;
