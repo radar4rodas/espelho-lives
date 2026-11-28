@@ -82,6 +82,17 @@ def _tempo_loop(d):
     return horas, bool(d.get("encerrar_fim", True))
 
 
+def _etiqueta(d):
+    """(ligada, texto) da etiqueta da reprise vindos da página, ou o erro para mostrar."""
+    ligada = bool(d.get("etiqueta", True))
+    texto = " ".join(str(d.get("etiqueta_texto") or "").split())
+    if len(texto) > transmissao.ETIQUETA_MAX:
+        return None, f"O texto da etiqueta pode ter até {transmissao.ETIQUETA_MAX} letras."
+    if ligada and not texto:
+        return None, "Escreva o texto da etiqueta ou desligue a etiqueta."
+    return (ligada, texto or transmissao.ETIQUETA_PADRAO), None
+
+
 def _log_lado(lado, nivel, texto, *args):
     espelho.log.log(nivel, texto, *args, extra={"lado": lado})
 
@@ -130,6 +141,7 @@ class Lado:
             "alarme_tipo": self.alarme_tipo,
             "alarme_detalhe": self.alarme_detalhe,
             "pausa": self.pausa if rodando else False,
+            "marcas": getattr(self.esp, "marcas", 0) if rodando else 0,
         }
 
 
@@ -271,6 +283,10 @@ class Painel:
         if reprise:
             cfg["repetir_reprise"] = bool(d.get("repetir", True))
             cfg["horas_reprise"], cfg["encerrar_fim_reprise"] = _tempo_loop(d)
+            etiqueta, erro = _etiqueta(d)
+            if erro:
+                return erro
+            cfg["etiqueta_ligada"], cfg["etiqueta_texto"] = etiqueta
             if cfg["repetir_reprise"] and cfg["horas_reprise"] and cfg["encerrar_fim_reprise"] \
                     and not ponte.status.get("aberto"):
                 return ("Para encerrar a live na Shopee quando o tempo acabar, a extensão precisa estar instalada "
@@ -364,6 +380,10 @@ class Painel:
             return erro
         cfg["repetir_st"] = bool(d.get("repetir", True))
         cfg["horas_st"], cfg["encerrar_fim_st"] = _tempo_loop(d)
+        etiqueta, erro = _etiqueta(d)
+        if erro:
+            return erro
+        cfg["etiqueta_ligada_st"], cfg["etiqueta_texto_st"] = etiqueta
         if cfg["repetir_st"] and cfg["horas_st"] and cfg["encerrar_fim_st"] and not ponte.status.get("aberto"):
             return ("Para encerrar a live no TikTok quando o tempo acabar, a extensão precisa estar instalada "
                     "no Chrome e conectada. Ou desligue essa opção.")
@@ -371,7 +391,8 @@ class Painel:
             espelho.salvar_config(cfg)
         except OSError:
             pass
-        motor = {**cfg, "atraso_seg": cfg["atraso_st"], "mutar_palavras": cfg["mutar_st"]}
+        motor = {**cfg, "atraso_seg": cfg["atraso_st"], "mutar_palavras": cfg["mutar_st"],
+                 "etiqueta_ligada": cfg["etiqueta_ligada_st"], "etiqueta_texto": cfg["etiqueta_texto_st"]}
         esp = espelho.ReprisadorTikTok(motor, espelho.achar_ffmpeg(cfg), arquivo, repetir=cfg["repetir_st"],
                                        limite_seg=cfg["horas_st"] * 3600,
                                        ao_acabar_tempo=ponte.tiktok_encerrar if cfg["encerrar_fim_st"] else None,
@@ -483,6 +504,25 @@ class Painel:
                 _log_lado(s, logging.INFO, "Parando a pedido do painel...")
                 threading.Thread(target=esp.parar, daemon=True, name=f"{s}:parar").start()
 
+    def marcar(self):
+        """⭐ Marca o momento em todo envio que está gravando: no fim da live vira corte para Reels."""
+        with self.lock:
+            rodando = [(s, l.esp) for s, l in self.lados.items() if l.esp]
+        if not rodando:
+            return {"ok": False, "detalhe": "Nenhuma live está passando pelo computador agora."}
+        feitos, erros = [], []
+        for s, esp in rodando:
+            erro = esp.marcar()
+            if erro:
+                erros.append(f"{NOME_LADO[s]}: {erro}")
+            else:
+                feitos.append(f"{NOME_LADO[s]} ({esp.marcas}º)")
+                _log_lado(s, logging.INFO, "⭐ Momento marcado (%dº desta live): vira corte para Reels no fim.",
+                          esp.marcas)
+        if not feitos:
+            return {"ok": False, "detalhe": "Não marquei: " + "; ".join(erros)}
+        return {"ok": True, "detalhe": "⭐ Marcado: " + ", ".join(feitos) + ". O corte sai no fim da live."}
+
     def alarme_ok(self, sentido=None):
         with self.lock:
             for s in ([sentido] if sentido in LADOS else LADOS):
@@ -523,6 +563,10 @@ class Painel:
                 "horas_st": int(cfg.get("horas_st", 0) or 0),
                 "encerrar_fim_reprise": bool(cfg.get("encerrar_fim_reprise", True)),
                 "encerrar_fim_st": bool(cfg.get("encerrar_fim_st", True)),
+                "etiqueta_ligada": bool(cfg.get("etiqueta_ligada", True)),
+                "etiqueta_texto": cfg.get("etiqueta_texto") or transmissao.ETIQUETA_PADRAO,
+                "etiqueta_ligada_st": bool(cfg.get("etiqueta_ligada_st", True)),
+                "etiqueta_texto_st": cfg.get("etiqueta_texto_st") or transmissao.ETIQUETA_PADRAO,
                 "atraso": cfg.get("atraso_seg", 7),
                 "mutar_palavras": cfg.get("mutar_palavras", True),
                 "atraso_st": cfg.get("atraso_st", cfg.get("atraso_seg", 7)),
@@ -711,6 +755,9 @@ def criar_handler(painel, porta):
                 erro = obs_tiktok.garantir(espelho.log)
                 _obs_cache["quando"] = 0.0
                 self._json({"ok": erro is None, "erro": erro})
+            elif self.path == "/api/marcar":
+                r = painel.marcar()
+                self._json(r, 200 if r["ok"] else 400)
             elif self.path == "/api/alarme/ok":
                 painel.alarme_ok(_sentido(dados))
                 self._json({"ok": True})

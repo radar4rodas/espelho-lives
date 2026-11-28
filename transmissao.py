@@ -13,6 +13,7 @@ Como o áudio é ouvido N segundos antes de sair para a Shopee, dá tempo de rec
 """
 
 import collections
+import hashlib
 import json
 import logging
 import os
@@ -20,38 +21,18 @@ import queue
 import re
 import socket
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
 
 import contador
+from mudo import (DESCRICAO_MUDO, GRAMATICAS, TAXA_VOZ, achar_palavras,  # noqa: F401
+                  carregar_modelo, _mesclar)
 
 log = logging.getLogger("espelho")
 
 BASE = Path(__file__).resolve().parent
-PASTA_MODELO = BASE / "modelos" / "vosk-model-small-pt-0.3"
-TAXA_VOZ = 16000
-
-# O modelo em português "ouve" TikTok como "tique toque" e Shopee ("xópi") como "chope".
-# Procurar só por estas frases (o resto vira [unk]) é bem mais confiável do que transcrever tudo.
-# Saudações também são mutadas nas duas direções (ex.: "boa noite" numa live que sai em outro horário).
-SAUDACOES = {("boa", "noite"): "boa noite", ("boa", "tarde"): "boa tarde", ("bom", "dia"): "bom dia"}
-_FRASES_SAUDACAO = list(SAUDACOES.values())
-GRAMATICAS = {
-    "tiktok": ["tique toque", "tique toque shop", "tique toque shopping"] + _FRASES_SAUDACAO + ["[unk]"],
-    # Shopee -> TikTok: "Shopee" vira "chope"; "shop"/"shopping" sozinhos; e "Pix" (o modelo não conhece "pix":
-    # ouve "piques"). O TikTok Shop trata "pague no Pix" / "na Shopee" como mandar o cliente para fora (aviso de 23/11).
-    "shopee": ["chope", "shop", "shopping", "piques"] + _FRASES_SAUDACAO + ["[unk]"],
-}
-# palavra reconhecida -> nome que aparece no registro
-MUDO_SHOPEE = {"chope": "shopee", "shop": "shop", "shopping": "shop", "piques": "pix"}
-DESCRICAO_MUDO = {"tiktok": "'tiktok', 'tiktok shop', 'bom dia', 'boa tarde' e 'boa noite'",
-                  "shopee": "'shopee', 'shop', 'pix', 'bom dia', 'boa tarde' e 'boa noite'"}
-PALAVRAS_SHOP = {"shop", "shopping"}
-FOLGA_ANTES = 0.15   # segundos de mudo antes da palavra
-FOLGA_DEPOIS = 0.20  # e depois
-
-_modelo = {"obj": None, "tentou": False}
 
 
 def nome_thread(sufixo):
@@ -62,41 +43,12 @@ def nome_thread(sufixo):
     return f"{lado}:{sufixo}" if lado else sufixo
 
 
-def carregar_modelo():
-    """Carrega o modelo de voz uma vez só. Retorna None se não estiver disponível."""
-    if _modelo["tentou"]:
-        return _modelo["obj"]
-    _modelo["tentou"] = True
-    try:
-        import vosk
-        vosk.SetLogLevel(-2)   # só erros; -1 ainda mostra avisos internos sem importância
-        if not PASTA_MODELO.is_dir():
-            log.warning("Modelo de voz não encontrado em %s. O mudo automático fica desligado.", PASTA_MODELO)
-            return None
-        _modelo["obj"] = vosk.Model(str(PASTA_MODELO))
-    except ImportError:
-        log.warning("Pacote vosk não instalado (python -m pip install --user vosk). Mudo automático desligado.")
-    except Exception as e:
-        log.warning("Não consegui carregar o modelo de voz (%s). Mudo automático desligado.", e)
-    return _modelo["obj"]
-
-
 def _ouvir():
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.bind(("127.0.0.1", 0))
     s.listen(1)
     s.settimeout(30)
     return s, s.getsockname()[1]
-
-
-def _mesclar(janelas):
-    out = []
-    for a, b in sorted(janelas):
-        if out and a <= out[-1][1] + 0.05:
-            out[-1] = (out[-1][0], max(out[-1][1], b))
-        else:
-            out.append((a, b))
-    return out
 
 
 def _erro_de_envio(linha):
@@ -326,14 +278,33 @@ def formato_do_ts(dados):
 _FONTE_ETIQUETA =Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts" / "arialbd.ttf"
 
 
-def filtro_etiqueta():
-    """Etiqueta pequena "REPRISE" no canto de cima, à direita, em toda reprise (deixa claro que é gravação)."""
-    fonte = ""
-    if _FONTE_ETIQUETA.exists():
-        fonte = "fontfile='" + _FONTE_ETIQUETA.as_posix().replace(":", r"\:") + "':"
+ETIQUETA_PADRAO = "REPRISE"
+ETIQUETA_MAX = 40
+
+
+def texto_etiqueta(cfg):
+    """Texto da etiqueta da reprise escolhido no painel ("" = desligada)."""
+    if not cfg.get("etiqueta_ligada", True):
+        return ""
+    texto = " ".join(str(cfg.get("etiqueta_texto") or "").split())[:ETIQUETA_MAX]
+    return texto or ETIQUETA_PADRAO
+
+
+def _caminho_filtro(caminho):
+    return "'" + Path(caminho).as_posix().replace(":", r"\:") + "'"
+
+
+def filtro_etiqueta(texto=ETIQUETA_PADRAO):
+    """Etiqueta pequena no canto de cima, à direita, na reprise (deixa claro que é gravação).
+    O texto vai num arquivo: assim aspas, dois-pontos, % e barras escritos no painel não quebram o filtro do ffmpeg."""
+    arquivo = Path(tempfile.gettempdir()) / (
+        "espelho_etiqueta_" + hashlib.sha1(texto.encode("utf-8")).hexdigest()[:10] + ".txt")
+    if not arquivo.exists():
+        arquivo.write_text(texto, encoding="utf-8")
+    fonte = ("fontfile=" + _caminho_filtro(_FONTE_ETIQUETA) + ":") if _FONTE_ETIQUETA.exists() else ""
     # pequena e bem no canto de cima, para não parecer nome de produto
-    return (f"drawtext={fonte}text='REPRISE':fontsize=h*0.0125:fontcolor=white@0.85:"
-            "box=1:boxcolor=black@0.45:boxborderw=5:x=w-tw-w*0.03:y=h*0.02")
+    return (f"drawtext={fonte}textfile={_caminho_filtro(arquivo)}:expansion=none:fontsize=h*0.0125:"
+            "fontcolor=white@0.85:box=1:boxcolor=black@0.45:boxborderw=5:x=w-tw-w*0.03:y=h*0.02")
 
 
 def _codificador(ffmpeg, cfg):
@@ -344,10 +315,10 @@ def _codificador(ffmpeg, cfg):
             "-sc_threshold", "0"]
 
 
-def cmd_saida(cfg, ffmpeg, porta_ts, preview, deslocamento=0.0, etiqueta=False, ajuste_voz=None, tela=None):
+def cmd_saida(cfg, ffmpeg, porta_ts, preview, deslocamento=0.0, etiqueta="", ajuste_voz=None, tela=None):
     """PROCESSADOR de um trecho: aplica o mudo (e recodifica, se for o caso) e devolve MPEG-TS no stdout.
     'deslocamento' faz os tempos deste trecho continuarem de onde o trecho anterior parou.
-    etiqueta=True (reprise): escreve "REPRISE" no vídeo, o que obriga a recodificar.
+    etiqueta="texto" (reprise): escreve o texto no vídeo, o que obriga a recodificar ("" = sem etiqueta).
     tela (contador.TelaFFmpeg): desenha o contador "Oferta termina em" (só para a Shopee; obriga a recodificar)."""
     cmd = [ffmpeg, "-hide_banner", "-loglevel", "warning", "-stats", "-y",
            "-analyzeduration", "1500000",
@@ -357,13 +328,13 @@ def cmd_saida(cfg, ffmpeg, porta_ts, preview, deslocamento=0.0, etiqueta=False, 
     # volume@mute recebe, em tempo real, a lista de trechos a silenciar
     filtro_audio = "volume@mute=volume=1:eval=frame,aresample=44100"
     ab = f"{int(cfg['bitrate_audio_kbps'])}k"
-    marca = ("," + filtro_etiqueta()) if etiqueta else ""
+    marca = ("," + filtro_etiqueta(etiqueta)) if etiqueta else ""
     # prévia no painel (1 quadro por segundo), com a etiqueta quando houver
-    vf_previa = ("fps=1," + filtro_etiqueta() + ",scale=360:-2") if etiqueta else "fps=1,scale=360:-2"
+    vf_previa = ("fps=1," + filtro_etiqueta(etiqueta) + ",scale=360:-2") if etiqueta else "fps=1,scale=360:-2"
     if cfg.get("saida") == "obs":
         # Para o OBS (live de vendas do TikTok Shop): o vídeo vai como veio (o OBS decodifica),
         # só o áudio é refeito por causa do mudo. Leve para o computador.
-        # Na reprise o vídeo é refeito para levar a etiqueta "REPRISE".
+        # Na reprise com etiqueta o vídeo é refeito para levá-la.
         if etiqueta:
             # enc_time_base 1/90000: sem isso o codificador conta o tempo em quadros (1/30 s) e o atraso
             # da imagem abaixo (ex.: 50 ms = 1,5 quadro) arredonda para dois quadros com o mesmo tempo,
@@ -530,34 +501,8 @@ class Censor:
             palavras = json.loads(self.rec.Result()).get("result", [])
         else:
             palavras = json.loads(self.rec.PartialResult()).get("partial_result", [])
-        for i in range(len(palavras) - 1):
-            a, b = palavras[i], palavras[i + 1]
-            nome = SAUDACOES.get((a["word"], b["word"]))
-            # as duas palavras coladas: "muito bom, e o dia..." (com pausa no meio) não conta.
-            # No resultado provisório, a última palavra ainda pode mudar de tempo: espera vir mais uma.
-            if nome and b["start"] - a["end"] < 0.15 and (final or i + 2 < len(palavras)):
-                self._mutar(max(0.0, a["start"] - FOLGA_ANTES), b["end"] + FOLGA_DEPOIS, nome)
-        if self.alvo == "shopee":
-            for j, p in enumerate(palavras):
-                nome = MUDO_SHOPEE.get(p["word"])
-                # "pix" ("piques") confunde com "pode pedir" no resultado provisório: só vale no resultado final
-                # (com boa confiança) ou, no provisório, se já veio mais uma palavra depois
-                if nome == "pix" and not ((final and p.get("conf", 1.0) >= 0.5) or (not final and j + 1 < len(palavras))):
-                    continue
-                if nome:
-                    self._mutar(max(0.0, p["start"] - FOLGA_ANTES), p["end"] + FOLGA_DEPOIS, nome)
-            return
-        for i in range(len(palavras) - 1):
-            a, b = palavras[i], palavras[i + 1]
-            if a["word"] == "tique" and b["word"] == "toque":
-                ini, fim, nome = a["start"] - FOLGA_ANTES, b["end"] + FOLGA_DEPOIS, "tiktok"
-                if i + 2 < len(palavras):
-                    c = palavras[i + 2]
-                    # "shop" só conta se vier colado ao "tiktok" e com boa confiança
-                    if (c["word"] in PALAVRAS_SHOP and c["start"] - b["end"] < 0.3
-                            and c.get("conf", 1.0) >= 0.6):
-                        fim, nome = c["end"] + FOLGA_DEPOIS, "tiktok shop"
-                self._mutar(max(0.0, ini), fim, nome)
+        for ini, fim, nome in achar_palavras(palavras, final, self.alvo):
+            self._mutar(ini, fim, nome)
 
     def _mutar(self, ini, fim, nome):
         novo = not any(a < fim and ini < b for a, b in self.janelas)
@@ -1211,7 +1156,7 @@ class Transmissao:
             self._seg_ajuste = seg
         proc = subprocess.Popen(
             cmd_saida(self.cfg, self.ffmpeg, self._porta_ts, self.preview, deslocamento,
-                      etiqueta=bool(self.arquivo), ajuste_voz=self._ajuste_voz, tela=self._tela),
+                      etiqueta=texto_etiqueta(self.cfg) if self.arquivo else "", ajuste_voz=self._ajuste_voz, tela=self._tela),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=self.flags)
         with self._lock:
             self._processadores[seg] = proc

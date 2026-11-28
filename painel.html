@@ -499,6 +499,12 @@
           <p class="dica" id="dica-horas" style="margin: 6px 0 10px"></p>
           <label class="opcao" id="opcao-encerrar-fim"><input type="checkbox" id="encerrar-fim"><span class="txt" id="txt-encerrar-fim">Quando o tempo acabar, encerrar a live</span></label>
         </div>
+        <div class="bloco"><label class="opcao"><input type="checkbox" id="etiqueta"><span class="txt">Mostrar <b>etiqueta</b> no vídeo<small>Texto pequeno no canto de cima, à direita, para quem assiste saber que é gravação.</small></span></label>
+          <div id="bloco-etiqueta">
+            <label class="rot" for="etiqueta-texto">Texto da etiqueta</label>
+            <div class="campo"><input id="etiqueta-texto" maxlength="40" placeholder="REPRISE" spellcheck="false"></div>
+          </div>
+        </div>
       </section>
 
       <!-- 1. ORIGEM · TikTok -->
@@ -700,6 +706,15 @@
         </div>
         <p class="dica" id="cont-dica">Mostra "Oferta termina em" no vídeo, à esquerda, abaixo do cartão do produto. Fica vermelho no último minuto e some ao zerar.</p>
       </div>
+
+      <!-- ⭐ momentos marcados viram cortes verticais para Reels no fim da live -->
+      <div class="contador-card" id="marcar-card">
+        <div class="contador-topo"><b>🎬 Cortes para Reels</b><span class="cont-status" id="marcar-status">0 marcados</span></div>
+        <div class="cont-linha">
+          <button type="button" class="btn" id="marcar">⭐ Marcar este momento</button>
+        </div>
+        <p class="dica" id="marcar-dica">Aperte logo depois de um momento bom. No fim da live, cada marcação vira um vídeo vertical de ~45 s (35 s antes e 10 s depois), em duas versões: TikTok (sem "shopee" e "pix") e Shopee Vídeo (sem "tiktok"). Ficam em gravacoes\Cortes. Precisa de "Gravar" ligado.</p>
+      </div>
     </aside>
   </div>
 
@@ -729,13 +744,14 @@ const NO_AR = (e) => e === "ao_vivo" || e === "reprise";
 const NOME_LADO = { ts: "TikTok → Shopee", st: "Shopee → TikTok" };
 const estadoAnt = { ts: "", st: "" };
 // atraso, mudo e loop são guardados separados para cada lado
-const valores = { ts: { atraso: 7, mutar: true, repetir: true, horas: 0, encerrarFim: true },
-                  st: { atraso: 7, mutar: true, repetir: true, horas: 0, encerrarFim: true } };
+const valores = { ts: { atraso: 7, mutar: true, repetir: true, horas: 0, encerrarFim: true, etiqueta: true, etiquetaTexto: "REPRISE" },
+                  st: { atraso: 7, mutar: true, repetir: true, horas: 0, encerrarFim: true, etiqueta: true, etiquetaTexto: "REPRISE" } };
 let modoNaTela = null;
 function guardarValores(modo) {
   if (!modo) return;
   valores[modo] = { atraso: $("atraso").value, mutar: $("mutar").checked, repetir: $("repetir").checked,
-                    horas: $("horas").value, encerrarFim: $("encerrar-fim").checked };
+                    horas: $("horas").value, encerrarFim: $("encerrar-fim").checked,
+                    etiqueta: $("etiqueta").checked, etiquetaTexto: $("etiqueta-texto").value };
 }
 function carregarValores(modo) {
   $("atraso").value = valores[modo].atraso;
@@ -743,8 +759,13 @@ function carregarValores(modo) {
   $("repetir").checked = !!valores[modo].repetir;
   $("horas").value = String(valores[modo].horas || 0);
   $("encerrar-fim").checked = !!valores[modo].encerrarFim;
+  $("etiqueta").checked = valores[modo].etiqueta !== false;
+  $("etiqueta-texto").value = valores[modo].etiquetaTexto || "REPRISE";
   atualizarTempo();
+  atualizarEtiqueta();
 }
+function atualizarEtiqueta() { $("bloco-etiqueta").hidden = !$("etiqueta").checked; }
+$("etiqueta").addEventListener("change", atualizarEtiqueta);
 // tempo de loop: só faz sentido com o loop ligado; o "encerrar" só aparece com um tempo escolhido
 function atualizarTempo() {
   const loop = $("repetir").checked, horas = parseInt($("horas").value, 10) || 0;
@@ -883,7 +904,7 @@ function pegaStat(texto, nome) {
 function travar(rodando) {
   if (rodando === rodandoAgora) return;
   rodandoAgora = rodando;
-  for (const id of ["usuario", "sessionid", "lembrar-sid", "gravar", "repetir", "horas", "encerrar-fim", "encerrar-shopee", "url", "chave", "atraso",
+  for (const id of ["usuario", "sessionid", "lembrar-sid", "gravar", "repetir", "horas", "encerrar-fim", "etiqueta", "etiqueta-texto", "encerrar-shopee", "url", "chave", "atraso",
                     "atraso-menos", "atraso-mais", "mutar", "qualidade", "modo", "fps", "intervalo", "pegar-chave",
                     "shopee-link", "gravar-tt", "auto-tiktok"]) $(id).disabled = rodando;
   document.querySelectorAll("[data-colar], .aba").forEach(b => b.disabled = rodando);
@@ -939,6 +960,7 @@ function mostrarSidSalvo(salvo) {
 
 function render(s) {
   mostrarContador(s.contador, s.lados);
+  mostrarMarcas(s.lados);
   if (!preenchido) {
     $("qualidade").innerHTML = "";
     for (const q of s.qualidades) $("qualidade").add(new Option(q, q));
@@ -949,9 +971,11 @@ function render(s) {
     $("fps").value = s.config.fps;
     $("intervalo").value = s.config.intervalo;
     valores.ts = { atraso: s.config.atraso, mutar: !!s.config.mutar_palavras, repetir: !!s.config.repetir_reprise,
-                   horas: s.config.horas_reprise || 0, encerrarFim: s.config.encerrar_fim_reprise !== false };
+                   horas: s.config.horas_reprise || 0, encerrarFim: s.config.encerrar_fim_reprise !== false,
+                   etiqueta: s.config.etiqueta_ligada !== false, etiquetaTexto: s.config.etiqueta_texto };
     valores.st = { atraso: s.config.atraso_st, mutar: !!s.config.mutar_st, repetir: !!s.config.repetir_st,
-                   horas: s.config.horas_st || 0, encerrarFim: s.config.encerrar_fim_st !== false };
+                   horas: s.config.horas_st || 0, encerrarFim: s.config.encerrar_fim_st !== false,
+                   etiqueta: s.config.etiqueta_ligada_st !== false, etiquetaTexto: s.config.etiqueta_texto_st };
     $("gravar").checked = !!s.config.gravar;
     $("gravar-tt").checked = !!s.config.gravar_st;
     $("auto-tiktok").checked = !!s.config.auto_tiktok;
@@ -1147,6 +1171,7 @@ $("form").addEventListener("submit", async (e) => {
     if (!arquivoSel) { alerta("Escolha um vídeo da lista de gravações."); return; }
     return iniciarCom({ tipo: "reprise", sentido: "st", arquivo: arquivoSel, repetir: $("repetir").checked,
                         horas: $("horas").value, encerrar_fim: $("encerrar-fim").checked,
+                        etiqueta: $("etiqueta").checked, etiqueta_texto: $("etiqueta-texto").value,
                         atraso: $("atraso").value, mutar_palavras: $("mutar").checked,
                         ajuste_voz: $("sincronia-voz").value });
   }
@@ -1164,6 +1189,7 @@ $("form").addEventListener("submit", async (e) => {
     atraso: $("atraso").value, mutar_palavras: $("mutar").checked,
     tipo: reprise ? "reprise" : "espelho", arquivo: arquivoSel, repetir: $("repetir").checked,
     horas: $("horas").value, encerrar_fim: $("encerrar-fim").checked,
+    etiqueta: $("etiqueta").checked, etiqueta_texto: $("etiqueta-texto").value,
     gravar: $("gravar").checked, encerrar_shopee: $("encerrar-shopee").checked
   });
 });
@@ -1327,6 +1353,20 @@ $("cont-parar").addEventListener("click", async () => {
   try {
     const r = await enviar("/api/contador", { lado: ladoContador(), acao: "parar" });
     if (r.ok) mostrarContador(r.contador);
+  } catch { alerta("Não consegui falar com o painel. Ele está aberto?"); }
+});
+
+// ---------------- ⭐ marcar momentos para os cortes de Reels
+function mostrarMarcas(lados) {
+  const n = Object.values(lados || {}).reduce((t, l) => t + (l.marcas || 0), 0);
+  $("marcar-status").textContent = n === 1 ? "1 marcado" : n + " marcados";
+  $("marcar-status").className = "cont-status" + (n ? " normal" : "");
+}
+$("marcar").addEventListener("click", async () => {
+  try {
+    const r = await enviar("/api/marcar", {});
+    alerta(r.ok ? "" : r.detalhe);
+    if (r.ok) { $("marcar").textContent = "✓ Marcado!"; setTimeout(() => { $("marcar").textContent = "⭐ Marcar este momento"; }, 1500); }
   } catch { alerta("Não consegui falar com o painel. Ele está aberto?"); }
 });
 
