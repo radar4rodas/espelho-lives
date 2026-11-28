@@ -184,6 +184,9 @@ def acao(dados, origem="pelo computador"):
         espelho.log.log(logging.INFO, "📣 Card \"SIGA O PERFIL\" %s %s (%s).", "na tela" if ligar else "tirado da tela",
                         ONDE[lado], origem, extra={"lado": lado})
         return {"ok": True, "contador": resumo()}
+    if dados.get("acao") not in ("iniciar", "parar"):
+        # (antes, um botão que o painel não conhecia caía aqui e pedia "um tempo", como se fosse o contador)
+        return {"ok": False, "erro": "Este botão é de uma versão mais nova do painel. Feche e abra o painel de novo."}
     if dados.get("acao") == "parar":
         parar(lado)
         espelho.log.log(logging.INFO, "⏱ Contador tirado da tela %s (%s).", ONDE[lado], origem, extra={"lado": lado})
