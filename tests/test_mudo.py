@@ -60,7 +60,17 @@ CASOS = [
     ("shopee", False, [p("piques", 3.0, 3.4), p("agora", 3.5, 3.9)], [(2.85, 3.6, "pix")]),
     ("shopee", True, [p("bom", 0.1, 0.3), p("dia", 0.35, 0.6), p("shopping", 1.0, 1.5)],
      [(0.0, 0.8, "bom dia"), (0.85, 1.7, "shop")]),
+    # "tira o bocal" ouvido como "tique toque" com pouca confiança: não muta (CONF_MIN_TIKTOK)
+    ("tiktok", True, [p("tique", 1.0, 1.3, conf=0.3), p("toque", 1.3, 1.6)], []),
 ]
+
+
+class TestGramatica(unittest.TestCase):
+    def test_acentos_vao_escritos_direto(self):
+        # com "é" escapado (é) o Vosk não acha a palavra
+        import mudo
+        self.assertIn("você", mudo.gramatica_json("tiktok"))
+        self.assertNotIn("\\u00", mudo.gramatica_json("shopee"))
 
 
 class TestMudoDaLive(unittest.TestCase):

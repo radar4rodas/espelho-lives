@@ -190,6 +190,11 @@
   .crono-acoes { display: grid; grid-template-columns: 2fr 1fr; gap: 6px; }
   .crono .b-iniciar { background: var(--acc); }
   .crono .b-parar { background: transparent; color: var(--bad); box-shadow: 0 0 0 1.5px rgba(255, 77, 94, .5) inset; }
+  .card-siga { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .crono .b-card-on { background: var(--acc); }
+  .crono .b-banner { width: 100%; background: var(--acc); }
+  .crono .b-banner.tirar { background: transparent; color: var(--bad); box-shadow: 0 0 0 1.5px rgba(255, 77, 94, .5) inset; }
+  .crono-status.ligado { background: rgba(47, 210, 127, .16); color: #2fd27f; }
 </style>
 </head>
 <body>
@@ -243,6 +248,13 @@
       <button type="button" class="b-iniciar">▶ Iniciar contador</button>
       <button type="button" class="b-parar">■ Parar</button>
     </div>
+    <div class="card-siga">
+      <div class="crono-topo"><b>📣 Card "SIGA O PERFIL"</b><span class="crono-status" id="card-st">Desligado</span></div>
+      <div class="crono-acoes">
+        <button type="button" class="b-card-on">📣 Mostrar card</button>
+        <button type="button" class="b-parar b-card-off">■ Tirar</button>
+      </div>
+    </div>
   </div>
   <div class="chat" data-site="tiktok">
     <h3>💬 Comentários do TikTok</h3>
@@ -283,6 +295,17 @@
     <div class="crono-acoes">
       <button type="button" class="b-iniciar">▶ Iniciar contador</button>
       <button type="button" class="b-parar">■ Parar</button>
+    </div>
+    <div class="card-siga">
+      <div class="crono-topo"><b>📣 Card "SIGA O PERFIL"</b><span class="crono-status" id="card-ts">Desligado</span></div>
+      <div class="crono-acoes">
+        <button type="button" class="b-card-on">📣 Mostrar card</button>
+        <button type="button" class="b-parar b-card-off">■ Tirar</button>
+      </div>
+    </div>
+    <div class="card-siga">
+      <div class="crono-topo"><b>📌 Banner "SIGA O PERFIL"</b><span class="crono-status" id="banner-ts">Desligado</span></div>
+      <button type="button" class="b-banner">📌 Mostrar banner</button>
     </div>
   </div>
   <div class="chat" data-site="shopee">
@@ -619,6 +642,14 @@ function desenharCronos() {
     } else fase = "off";
     el.className = "crono-status " + (fase === "off" ? "" : fase);
     el.textContent = texto;
+    const card = $("card-" + lado);
+    if (card) { card.className = "crono-status" + (e.card ? " ligado" : ""); card.textContent = e.card ? "Na tela" : "Desligado"; }
+    const bn = $("banner-" + lado);
+    if (bn) {
+      bn.className = "crono-status" + (e.banner ? " ligado" : ""); bn.textContent = e.banner ? "Na tela" : "Desligado";
+      const b = document.querySelector(".crono[data-lado=ts] .b-banner");
+      b.textContent = e.banner ? "■ Tirar banner" : "📌 Mostrar banner"; b.classList.toggle("tirar", !!e.banner);
+    }
   }
 }
 setInterval(desenharCronos, 250);
@@ -626,7 +657,9 @@ async function pedirContador(dados) {
   try {
     const r = await (await fetch("/api/contador", { method: "POST", headers: { "Content-Type": "application/json" },
                                                      body: JSON.stringify(dados) })).json();
-    if (r.ok) { mostrarCronos(r.contador); toast(dados.acao === "parar" ? "✅ Contador tirado da tela" : "✅ Contador na tela", true); }
+    if (r.ok) { mostrarCronos(r.contador); toast({ parar: "✅ Contador tirado da tela", card_ligar: "✅ Card na tela",
+                                              card_desligar: "✅ Card tirado da tela",
+                                              banner_ligar: "✅ Banner na tela", banner_desligar: "✅ Banner tirado da tela" }[dados.acao] || "✅ Contador na tela", true); }
     else toast("⚠ " + (r.detalhe || r.erro || "Não deu certo"), false);
   } catch (e) { toast("⚠ Sem conexão com o computador. Está no Wi-Fi de casa?", false); }
 }
@@ -643,7 +676,11 @@ document.querySelectorAll(".crono").forEach(caixa => {
     if (total < 5 || total > 99 * 60 + 59) { toast("⚠ Escolha um tempo entre 5 segundos e 99 minutos.", false); return; }
     pedirContador({ lado, acao: "iniciar", segundos: total });
   });
-  caixa.querySelector(".b-parar").addEventListener("click", () => pedirContador({ lado, acao: "parar" }));
+  caixa.querySelector(".crono-acoes .b-parar:not(.b-card-off)").addEventListener("click", () => pedirContador({ lado, acao: "parar" }));
+  caixa.querySelector(".b-card-on").addEventListener("click", () => pedirContador({ lado, acao: "card_ligar" }));
+  caixa.querySelector(".b-card-off").addEventListener("click", () => pedirContador({ lado, acao: "card_desligar" }));
+  const bb = caixa.querySelector(".b-banner");
+  if (bb) bb.addEventListener("click", () => pedirContador({ lado, acao: (cronos.ts || {}).banner ? "banner_desligar" : "banner_ligar" }));
 });
 
 $("alarme-ok").addEventListener("click", async () => {

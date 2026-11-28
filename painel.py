@@ -97,6 +97,27 @@ def _log_lado(lado, nivel, texto, *args):
     espelho.log.log(nivel, texto, *args, extra={"lado": lado})
 
 
+MAX_FILA = 20
+
+
+def _fila_reprise(d, sentido):
+    """Vídeos escolhidos para a reprise, na ordem (fila). Devolve a lista de caminhos ou a mensagem de erro."""
+    nomes = d.get("arquivos")
+    if not isinstance(nomes, list) or not nomes:
+        nomes = [d.get("arquivo")] if d.get("arquivo") else []
+    if not nomes:
+        return "Escolha um vídeo da lista de gravações."
+    if len(nomes) > MAX_FILA:
+        return f"A fila pode ter no máximo {MAX_FILA} vídeos."
+    caminhos = []
+    for nome in nomes:
+        p = espelho.caminho_gravacao(nome, sentido)
+        if not p:
+            return f"O vídeo {nome} não está mais na pasta (ou ainda está sendo gravado). Atualize a lista."
+        caminhos.append(p)
+    return caminhos
+
+
 class Lado:
     """Estado de uma das transmissões (TikTok -> Shopee ou Shopee -> TikTok)."""
 
@@ -145,12 +166,41 @@ class Lado:
         }
 
 
+class Gravacao:
+    """Estado do "Só gravar" de um lado (independente da transmissão daquele lado)."""
+
+    def __init__(self, sentido):
+        self.sentido = sentido
+        self.grav = None                # espelho.Gravador rodando, ou None
+        self.estado = "parado"
+        self.mensagem = ""
+
+    def resumo(self):
+        g = self.grav
+        arquivo = g.arquivo_atual if g else None
+        try:
+            mb = round(arquivo.stat().st_size / 1e6, 1) if arquivo else None
+        except OSError:
+            mb = None
+        return {
+            "rodando": g is not None,
+            "estado": self.estado if g is not None else "parado",
+            "mensagem": self.mensagem,
+            "origem": g.origem if g else "",
+            "gravando_seg": int(time.time() - g.desde) if g and g.desde else None,
+            "arquivo": arquivo.name if arquivo else "",
+            "mb": mb,
+            "partes": g.partes if g else 0,
+        }
+
+
 class Painel:
     """Guarda o estado dos dois lados para a página consultar."""
 
     def __init__(self):
         self.lock = threading.Lock()
         self.lados = {s: Lado(s) for s in LADOS}
+        self.gravacoes = {s: Gravacao(s) for s in LADOS}
         self.logs = deque(maxlen=500)
         self.prox_id = 1
         self._avisos_vistos = {}          # (site, texto) -> quando: o mesmo aviso não dispara duas vezes
@@ -241,9 +291,9 @@ class Painel:
         sessionid = espelho.limpar_sessionid(d.get("sessionid"))
         arquivo = None
         if reprise:
-            arquivo = espelho.caminho_gravacao(d.get("arquivo"), "ts")
-            if not arquivo:
-                return "Escolha um vídeo da lista de gravações."
+            arquivo = _fila_reprise(d, "ts")
+            if isinstance(arquivo, str):
+                return arquivo
             erro = espelho.validar("reprise", url)   # o @ do TikTok não é usado na reprise
         else:
             erro = espelho.validar(usuario, url) or espelho.validar_sessionid(sessionid)
@@ -371,10 +421,10 @@ class Painel:
         return esp, "tiktok", cfg["atraso_st"], cfg["mutar_st"]
 
     def _montar_reprise_tiktok(self, d, lado):
-        """Reprisa uma gravação da pasta 'Shopee para TikTok' no TikTok Shop, pelo OBS."""
-        arquivo = espelho.caminho_gravacao(d.get("arquivo"), "st")
-        if not arquivo:
-            return "Escolha um vídeo da lista de gravações."
+        """Reprisa uma gravação (ou uma fila delas) da pasta 'Shopee para TikTok' no TikTok Shop, pelo OBS."""
+        arquivo = _fila_reprise(d, "st")
+        if isinstance(arquivo, str):
+            return arquivo
         cfg, erro = self._cfg_tiktok(d)
         if erro:
             return erro
@@ -494,6 +544,72 @@ class Painel:
                                 plataforma, r.get("detalhe") or r.get("erro") or "sem detalhe")
             self._aviso(alvo, "alarme", f"restricao_falhou|{nome}: {texto}||{plataforma}")
 
+    # -------------------------------------------------------- só gravar (sem transmitir)
+
+    def gravar(self, d):
+        """Liga ou desliga o "Só gravar" de um lado. d: {sentido, acao: "iniciar"|"parar", usuario, sessionid,
+        shopee_link}. Devolve None ou a mensagem de erro."""
+        sentido = "st" if d.get("sentido") == "st" else "ts"
+        g = self.gravacoes[sentido]
+        if d.get("acao") == "parar":
+            grav = g.grav
+            if grav:
+                _log_lado(sentido, logging.INFO, "Parando a gravação a pedido do painel...")
+                threading.Thread(target=grav.parar, daemon=True, name=f"{sentido}:parar-grav").start()
+            return None
+        with self.lock:
+            if g.grav:
+                return "Já está gravando deste lado. Clique em Parar gravação antes de começar outra."
+        cfg = espelho.ler_config()
+        ffmpeg = espelho.achar_ffmpeg(cfg)
+        if not ffmpeg:
+            return "ffmpeg não encontrado. Instale com: winget install Gyan.FFmpeg"
+        if sentido == "ts":
+            usuario = espelho.limpar_usuario(d.get("usuario"))
+            if not usuario:
+                return "Informe o @ do perfil do TikTok que você quer gravar."
+            sessionid = espelho.limpar_sessionid(d.get("sessionid"))
+            erro = espelho.validar_sessionid(sessionid)
+            if erro:
+                return erro
+            if not sessionid and cfg.get("lembrar_sessionid"):
+                sessionid = cfg.get("tiktok_sessionid", "")
+            cfg["gravar_tiktok_usuario"] = usuario
+            grav = espelho.Gravador("ts", cfg, ffmpeg, aviso=self._aviso_grav(g), usuario=usuario, sessionid=sessionid)
+        else:
+            link = str(d.get("shopee_link") or "").strip()
+            sessao_id, erro = espelho.resolver_link_shopee(link)
+            if erro:
+                return erro[0].upper() + erro[1:] + "."
+            cfg["gravar_shopee_link"] = link
+            grav = espelho.Gravador("st", cfg, ffmpeg, aviso=self._aviso_grav(g), sessao_id=sessao_id)
+        try:
+            espelho.salvar_config(cfg)
+        except OSError:
+            pass
+        with self.lock:
+            g.grav, g.estado, g.mensagem = grav, "aguardando", ""
+        threading.Thread(target=self._rodar_grav, args=(g, grav), daemon=True, name=f"{sentido}:grav").start()
+        return None
+
+    def _aviso_grav(self, g):
+        def aviso(estado, msg):
+            with self.lock:
+                g.estado, g.mensagem = estado, msg
+        return aviso
+
+    def _rodar_grav(self, g, grav):
+        try:
+            grav.executar()
+        except Exception as e:      # noqa: BLE001
+            espelho.log.exception("Erro inesperado na gravação: %s", e)
+        finally:
+            with self.lock:
+                g.grav = None
+                g.estado = "parado"
+            # emenda as partes num vídeo só (em segundo plano)
+            threading.Thread(target=grav.juntar_gravacoes, daemon=True, name="juntar-gravacao").start()
+
     def parar(self, sentido=None):
         """Para um lado (ou os dois, se sentido for None)."""
         for s in ([sentido] if sentido in LADOS else LADOS):
@@ -546,9 +662,11 @@ class Painel:
                     next(iter(espelho.QUALIDADES)))
         with self.lock:
             lados = {s: l.resumo() for s, l in self.lados.items()}
+            gravacoes = {s: g.resumo() for s, g in self.gravacoes.items()}
             logs = [l for l in self.logs if l["id"] > desde_log]
         return {
             "lados": lados,
+            "gravacoes": gravacoes,
             "logs": logs,
             "shopee": ponte.status,
             "tiktok": ponte.status_tiktok,
@@ -581,6 +699,9 @@ class Painel:
                 "gravar_st": bool(cfg.get("gravar_st")),
                 "auto_tiktok": bool(cfg.get("auto_tiktok")),
                 "encerrar_restricao": bool(cfg.get("encerrar_restricao", True)),
+                "banner_siga": contador.banner_ligado(),
+                "gravar_tiktok_usuario": cfg.get("gravar_tiktok_usuario") or cfg.get("tiktok_usuario", ""),
+                "gravar_shopee_link": cfg.get("gravar_shopee_link", ""),
                 "qualidade": qual,
                 "modo": cfg.get("modo"),
                 "fps": cfg.get("fps"),
@@ -682,6 +803,12 @@ def criar_handler(painel, porta):
                 self._enviar(200, PAGINA_CONTADOR.read_bytes(), "text/html; charset=utf-8")
             elif caminho == "/api/contador":
                 self._json({**contador.resumo(), "agora": time.time()})
+            elif caminho == "/card_siga.png":
+                # imagem do card "SIGA O PERFIL" (a página contador.html, no OBS, mostra no vídeo do TikTok)
+                try:
+                    self._enviar(200, contador.IMAGEM_CARD.read_bytes(), "image/png")
+                except OSError:
+                    self._json({"erro": "sem imagem"}, 404)
             elif caminho == "/api/gravacoes":
                 sentido = "st" if params.get("pasta") == "st" else "ts"
                 self._json({"pasta": str(espelho.pasta_gravacao(sentido)),
@@ -713,6 +840,9 @@ def criar_handler(painel, porta):
             elif self.path == "/api/parar":
                 painel.parar(_sentido(dados))
                 self._json({"ok": True})
+            elif self.path == "/api/gravar":
+                erro = painel.gravar(dados if isinstance(dados, dict) else {})
+                self._json({"ok": erro is None, "erro": erro}, 200 if erro is None else 400)
             elif self.path == "/api/contador":
                 r = contador.acao(dados, "pelo computador")
                 self._json(r, 200 if r["ok"] else 400)
@@ -751,6 +881,12 @@ def criar_handler(painel, porta):
                                  "Shopee ou no TikTok, encerro só a live daquela plataforma"
                                  if ligado else "DESLIGADA")
                 self._json({"ok": True, "ligado": ligado})
+            elif self.path == "/api/banner":
+                # liga/desliga na hora, com a live no ar (o mesmo que o botão do quadro do contador)
+                ligado = bool(dados.get("ligado")) if isinstance(dados, dict) else True
+                r = contador.acao({"lado": "ts", "acao": "banner_ligar" if ligado else "banner_desligar"},
+                                  "pelo computador")
+                self._json({**r, "ligado": ligado}, 200 if r["ok"] else 400)
             elif self.path == "/api/obs/abrir":
                 erro = obs_tiktok.garantir(espelho.log)
                 _obs_cache["quando"] = 0.0
@@ -858,6 +994,9 @@ def main():
         for lado in painel.lados.values():
             if lado.esp:
                 lado.esp.parar()
+        for g in painel.gravacoes.values():
+            if g.grav:
+                g.grav.parar()
         servidor.server_close()
 
 

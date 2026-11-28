@@ -71,7 +71,9 @@ Além de retransmitir, ele:
 | `extensao_shopee/` | **Extensão do Chrome** (versão 1.13): pega URL e chave da Shopee, clica em Finalizar/Encerrar, lê avisos de restrição, lê e envia comentários, lê os números do Gerenciador de LIVE e deixa o som limpo no TikTok. |
 | `celular.py` + `celular.html` | Página do celular, separada do painel, que só aceita aparelhos da rede de casa. |
 | `notificacoes.py` | Envia notificações pelo ntfy.sh para um canal com nome aleatório e secreto. |
-| `imagens/ja_voltamos.png` | Imagem "Já voltamos!" que o OBS mostra se a Shopee pausar. |
+| `imagens/ja_voltamos.png` | Imagem "Já voltamos!": o OBS mostra se a Shopee pausar, e a Shopee recebe se o vídeo do TikTok sumir. |
+| `imagens/siga_o_perfil.png` | Banner "SIGA O PERFIL" desenhado no vídeo que vai para a Shopee. |
+| `imagens/card_siga.png` | Card "SIGA O PERFIL" que liga e desliga pelo painel/celular (Shopee: no vídeo; TikTok: camada do OBS). |
 | `requirements.txt` | Bibliotecas Python: yt-dlp, curl_cffi, vosk e websockets. |
 | `config.json` | **Criado sozinho** na primeira vez. Guarda as suas configurações. **Nunca vai para o GitHub.** |
 | `modelos/` | Modelo de voz em português do Vosk. **Baixar à parte** (veja a instalação). |
@@ -157,7 +159,10 @@ A aba do painel no navegador pode ser fechada e aberta à vontade.
 ### Reprise
 
 Nas sub-abas **Reprisar gravação**: escolha o vídeo, se quer repetir em loop e por quanto tempo, e clique em
-Iniciar. Por padrão a reprise sai com a etiqueta **"REPRISE"** no canto; na etapa Gravação dá para desligar ou trocar o texto.
+Iniciar. Por padrão a reprise sai com a etiqueta **"REPRISE"** no canto, para quem assiste saber que é gravação; na etapa Gravação dá para desligar ou trocar o texto.
+- **Fila:** clicando em vários vídeos, na ordem, eles passam em sequência, emendados sem parar a live (cada vídeo
+  entra como um "trecho" novo, igual à volta do loop). O número em cada vídeo mostra a ordem.
+- Vídeos com 1 hora ou mais aparecem com o tempo em verde.
 
 ### Cortes para Reels
 
@@ -165,13 +170,27 @@ Durante a live, aperte **⭐ Marcar** (painel ou celular) logo depois de um mome
 marcação vira um vídeo vertical em `gravacoes\Cortes\`, em versão TikTok e versão Shopee Vídeo. Precisa de
 "Gravar" ligado. Detalhes no [LEIA-ME.md](LEIA-ME.md).
 
-### Contador "Oferta termina em"
+### Só gravar
+
+Sub-aba **Só gravar** de cada lado: grava a live (TikTok pelo @, Shopee pelo link) sem transmitir, copiando o vídeo
+como chega. TikTok vai para `gravacoes\TikTok para Shopee`; Shopee para `gravacoes\Shopee para TikTok`. Para sozinha
+quando a live acaba e emenda as partes no fim. É independente da transmissão daquele lado.
+
+### Contador "Oferta termina em" e card "SIGA O PERFIL"
 
 No quadro **⏱ Contador na tela** do painel, ou no celular: escolha o tempo e clique em **Iniciar**.
 - Ele aparece à esquerda, abaixo do cartão de produto.
 - Fica vermelho no último minuto e some quando zera.
 - Só aparece na live que passa pelo computador: na Shopee, quando é TikTok → Shopee; no TikTok, quando é
   Shopee → TikTok.
+
+O quadro **📣 Card "SIGA O PERFIL"** (logo abaixo, e no celular) põe e tira um card logo abaixo do contador, nos
+mesmos lugares. Fica até você tirar.
+
+### Mudo automático
+
+O reconhecimento de voz (Vosk, offline) procura só as palavras a mutar, mais algumas palavras comuns de som
+parecido ("iscas") que evitam mutar a fala à toa. Para "tiktok" ele também exige uma confiança mínima.
 
 ---
 
@@ -216,6 +235,11 @@ O painel cria e atualiza o arquivo sozinho. Os campos que mais importam:
 | `celular_ligado`, `porta_celular`, `porta_painel` | Liga/desliga a página do celular e as portas |
 | `tiktok_sessionid` + `lembrar_sessionid` | Login do TikTok, só para lives 18+. **É como uma senha.** |
 | `ffmpeg` | Caminho do ffmpeg.exe (vazio = procura sozinho) |
+| `tapa_pausa` | Manda "Já voltamos!" para a Shopee quando o vídeo do TikTok some (padrão: ligado) |
+| `banner_siga` | Banner "SIGA O PERFIL" ao lado do + Seguir da Shopee (padrão: ligado) |
+| `banner_siga_x`, `banner_siga_y`, `banner_siga_larg` | Posição e tamanho do banner, de 0 a 1 (ajuste para o nome da sua loja) |
+| `card_siga_x`, `card_siga_y`, `card_siga_larg` | Posição (canto de cima à esquerda) e largura do card, de 0 a 1 (padrão 0.11, 0.375, 0.42) |
+| `gravar_tiktok_usuario` / `gravar_shopee_link` | Último @ / link usado no "Só gravar" (o painel preenche sozinho) |
 
 ---
 

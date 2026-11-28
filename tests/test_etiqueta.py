@@ -34,7 +34,7 @@ class TestFiltroEtiqueta(unittest.TestCase):
 
 class TestCmdSaida(unittest.TestCase):
     CFG = {"modo": "copiar", "bitrate_audio_kbps": 128, "resolucao": "1280x720", "fps": 30,
-           "bitrate_video_kbps": 2500}
+           "bitrate_video_kbps": 2500, "banner_siga": False}   # o banner "SIGA O PERFIL" também refaz o vídeo
 
     def _cmd(self, etiqueta):
         return " ".join(transmissao.cmd_saida(dict(self.CFG), "ffmpeg", 5000, None, etiqueta=etiqueta))

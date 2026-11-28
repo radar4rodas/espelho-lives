@@ -18,9 +18,13 @@
   .tempo svg { width: 1.95vh; height: 1.95vh; flex: none; color: #ee4d2d; }
   .cont.urgente { background: #e02424; }
   .cont.urgente .txt, .cont.urgente .tempo, .cont.urgente .tempo svg { color: #fff; }
+  /* card "SIGA O PERFIL" (mesma imagem que vai no vídeo da Shopee); liga e desliga pelo painel */
+  .card { position: absolute; left: 11vw; top: 37.5vh; width: 42vw; height: auto; display: none; }
+  .card.ver { display: block; }
 </style>
 </head>
 <body>
+<img class="card" id="card" src="/card_siga.png" alt="">
 <div class="cont" id="cont">
   <div class="txt" id="txt">Oferta termina em</div>
   <div class="tempo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><circle cx="12" cy="12" r="9.5"/><path d="M12 6.5V12h4.2"/></svg><span id="tempo">00:00</span></div>
@@ -29,11 +33,18 @@
   const params = new URLSearchParams(location.search);
   const lado = params.get("lado") || "st";
   const cont = document.getElementById("cont");
+  const card = document.getElementById("card");
   function mostrar(e) {
     const ver = e.fase === "normal" || e.fase === "urgente";
     cont.className = "cont" + (ver ? " ver " + e.fase : "");
     if (ver) document.getElementById("tempo").textContent = e.tempo;
     if (e.texto) document.getElementById("txt").textContent = e.texto;
+    card.className = "card" + (e.card ? " ver" : "");
+    if (e.card_pos) {
+      card.style.left = (e.card_pos.x * 100) + "vw";
+      card.style.top = (e.card_pos.y * 100) + "vh";
+      card.style.width = (e.card_pos.larg * 100) + "vw";
+    }
   }
   async function atualizar() {
     try {
@@ -41,10 +52,12 @@
       mostrar(r[lado] || { fase: "off" });
     } catch (_) {
       cont.className = "cont";          // painel fechado: não mostra nada
+      card.className = "card";
     }
   }
-  if (params.get("demo")) {            // só para conferir o desenho: ?demo=normal ou ?demo=urgente
-    mostrar({ fase: params.get("demo"), tempo: params.get("demo") === "urgente" ? "00:04" : "01:08" });
+  if (params.get("demo")) {            // só para conferir o desenho: ?demo=normal, ?demo=urgente ou ?demo=card
+    const d = params.get("demo");
+    mostrar({ fase: d === "card" ? "off" : d, tempo: d === "urgente" ? "00:04" : "01:08", card: d === "card" });
   } else {
     atualizar();
     setInterval(atualizar, 250);

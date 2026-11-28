@@ -232,11 +232,15 @@ def _mensagem_bloqueio_tiktok():
     return f"TikTok respondeu HTTP 403. Pausando consultas por {minutos} min para não insistir durante o bloqueio."
 
 
-def _via_api(usuario, sessionid):
+def _via_api(usuario, sessionid, mot=None):
     """Consulta direta à API de lives do TikTok (imitando o Chrome).
 
     Retorna ("ao_vivo", (url, cabecalhos)), ("offline", None) ou ("erro", "mensagem").
+    mot: onde guardar o código da sala (padrão: o 'motivo' global, que o espelhamento usa). O gravador usa um
+    próprio, para não confundir o espelhamento quando os dois rodam ao mesmo tempo.
     """
+    motivo = globals()["motivo"] if mot is None else mot
+    motivo["codigo"] = None      # código da sala nesta consulta (2 = ao vivo, 3 = pausada, outro = acabou)
     try:
         from curl_cffi import requests as creq
     except ImportError:
@@ -261,6 +265,7 @@ def _via_api(usuario, sessionid):
     if not dados.get("user"):
         return "erro", f"perfil @{usuario} não encontrado no TikTok"
     sala = dados.get("liveRoom") or {}
+    motivo["codigo"] = sala.get("status")
     if sala.get("status") != 2:
         return "offline", None
 
@@ -544,33 +549,40 @@ class Espelhador:
     def _encerrar_shopee_ligado(self):
         return bool(self.cfg.get("encerrar_shopee") and self.ao_encerrar_tiktok)
 
-    # Consultar a cada ~1,4 s (eram 0,4 s + a consulta) coincidia com 403 do TikTok o dia todo (27/11).
-    # Quando a live acaba o vídeo também para, e a conferência logo após a queda finaliza na hora.
+    # Consultar a cada ~0,4 s (25/11) e depois a cada ~1,4 s (27/11) coincidia com HTTP 403 do TikTok (bloqueio):
+    # aí, quando a live engasgava, o painel não conseguia reconectar. Quando a live acaba o vídeo também para,
+    # e a conferência logo após a queda finaliza na hora.
     VIGIA_INTERVALO_SEG = 10
+    VIGIA_ESPERA_ERRO = (10, 20, 30)   # s depois de 1, 2, 3+ erros seguidos (403 = o TikTok pediu calma)
 
     def _vigiar_fim(self, sessao, usuario, sessionid):
         """Durante a live, pergunta ao TikTok a cada VIGIA_INTERVALO_SEG se ela acabou (2 confirmações seguidas)."""
-        seguidos, avisou_pausa = 0, False
+        seguidos, avisou_pausa, erros = 0, False, 0
         while not sessao._parar.is_set() and not self._parar.is_set():
             situacao, codigo = status_sala(usuario, sessionid)
+            espera = self.VIGIA_INTERVALO_SEG
             if situacao == "encerrada":
+                erros = 0
                 seguidos += 1
                 if seguidos == 1:
                     primeira = time.time()
                     continue                # reconfirma na hora, sem esperar
-                if seguidos >= 2:
-                    self._tiktok_encerrou_em = primeira
-                    log.info("⏹ O TikTok confirmou que a live de @%s acabou (código %s).", usuario, codigo)
-                    sessao.parar()
-                    return
-            else:
+                self._tiktok_encerrou_em = primeira
+                log.info("⏹ O TikTok confirmou que a live de @%s acabou (código %s).", usuario, codigo)
+                sessao.parar()
+                return
+            elif situacao == "erro":
                 seguidos = 0
+                erros += 1
+                espera = self.VIGIA_ESPERA_ERRO[min(erros, len(self.VIGIA_ESPERA_ERRO)) - 1]
+            else:
+                seguidos = erros = 0
                 if situacao == "pausada" and not avisou_pausa:
                     log.info("⏸ A live foi pausada no TikTok. A Shopee continua aberta.")
                     avisou_pausa = True
                 elif situacao == "ao_vivo":
                     avisou_pausa = False
-            sessao._parar.wait(self.VIGIA_INTERVALO_SEG)     # acorda na hora se a transmissão parar
+            sessao._parar.wait(espera)     # acorda na hora se a transmissão parar
 
     def _finalizar_shopee(self, usuario):
         inicio_fim = self._tiktok_encerrou_em or time.time()
@@ -612,6 +624,7 @@ class Espelhador:
         # a transmissão caiu e o TikTok não respondeu (ex.: HTTP 403) quando conferi se a live acabou:
         # sigo conferindo enquanto espero, para finalizar a Shopee assim que o TikTok confirmar o fim
         fim_a_confirmar = False
+        caiu_em = 0.0       # quando a última transmissão parou (logo depois de uma queda, tenta mais rápido)
 
         while not self._parar.is_set():
             stream = obter_stream(usuario, sessionid)
@@ -628,12 +641,14 @@ class Espelhador:
                     fim_a_confirmar = False     # a live continua (ou pausada): só espera ela voltar
             if not stream:
                 texto = motivo["texto"] or f"@{usuario} ainda não está ao vivo."
+                # a live caiu há menos de 3 min: tenta de novo a cada 5 s (antes esperava 20 s com a Shopee parada)
+                espera = 5 if time.time() - caiu_em < 180 else intervalo
                 if texto != ultimo_motivo:     # só registra quando o motivo muda
                     erro = texto.startswith("Não consegui")
-                    self._estado("aguardando", f"{texto} Verificando a cada {intervalo}s...",
+                    self._estado("aguardando", f"{texto} Verificando a cada {espera}s...",
                                  logging.WARNING if erro else logging.INFO)
                     ultimo_motivo = texto
-                self._parar.wait(intervalo)
+                self._parar.wait(espera)
                 continue
 
             if ultimo_motivo is not None or self._base_gravacao is None:
@@ -669,6 +684,7 @@ class Espelhador:
                     return
 
             dur = int(time.time() - inicio)
+            caiu_em = time.time()
             if self._reiniciar:
                 # o relógio do vídeo bagunçou: reconecta na hora (1 a 2 s de pausa em vez de travar a live)
                 self._estado("reconectando", "Reconectando para corrigir o vídeo...")
@@ -765,7 +781,7 @@ class Espelhador:
                 log.info("🎚 Sincronia da voz: imagem atrasada em %d ms. Aplicando sem parar a live...", int(ms))
             sessao.reaplicar("ajuste da sincronia da voz")
 
-    def _transmitir(self, url, cabecalhos, arquivo=None, repetir=False, inicio=0.0):
+    def _transmitir(self, url, cabecalhos, arquivo=None, repetir=False, inicio=0.0, fila=None, inicio_idx=0):
         from transmissao import Transmissao
         gravar_em = renovar = None
         if self.cfg.get("gravar") and not arquivo:
@@ -773,10 +789,12 @@ class Espelhador:
         if not arquivo:
             usuario, sessionid = self.cfg["tiktok_usuario"], self.cfg.get("tiktok_sessionid", "")
             renovar = lambda: obter_stream(usuario, sessionid)    # link novo para trocar sem parar
+        # com a imagem "Já voltamos!" no ar: a última consulta (do renovar) disse que a live ACABOU? (pausada não)
+        origem_encerrou = None if arquivo else (lambda: motivo.get("codigo") not in (None, 2, 3))
         sessao = Transmissao(self.cfg, self.ffmpeg, url, cabecalhos, self.destino, self.preview,
                              aviso=self.aviso, sem_janela=self.sem_janela, resumir_stats=resumir_stats,
                              arquivo=arquivo, repetir=repetir, gravar_em=gravar_em, renovar=renovar,
-                             inicio=inicio)
+                             inicio=inicio, origem_encerrou=origem_encerrou, fila=fila, inicio_idx=inicio_idx)
         self._sessao = sessao
         self._shopee_recusou = False
         self._link_recusado = False
@@ -793,6 +811,7 @@ class Espelhador:
             self._link_recusado = sessao.link_recusado
             self._reiniciar = sessao.precisa_reiniciar
             self._posicao_queda = sessao.posicao_ao_cair
+            self._idx_queda = sessao.idx_ao_cair
             self._voltas = sessao.voltas
             self._sessao = None
 
@@ -805,14 +824,19 @@ class Reprisador(Espelhador):
 
     def __init__(self, cfg, ffmpeg, destino, arquivo, repetir=True, limite_seg=0, ao_acabar_tempo=None,
                  estado_destino=None, **kw):
-        """limite_seg: em loop, por quanto tempo a reprise fica no ar (0 = até clicar em Parar).
+        """arquivo: um vídeo, ou uma lista de vídeos (fila: passam em sequência, emendados sem parar a live).
+        limite_seg: em loop, por quanto tempo a reprise fica no ar (0 = até clicar em Parar).
         ao_acabar_tempo: função que encerra a live no destino quando o tempo acaba (a extensão), ou None.
         estado_destino: função que devolve o status da página da live (a extensão), ou None."""
         super().__init__(cfg, ffmpeg, destino, **kw)
         self.estado_destino = estado_destino
         self._retomar_em = 0.0          # depois de uma queda, continua deste ponto do vídeo
+        self._retomar_idx = 0           # ... e deste vídeo da fila
         self._posicao_queda = None
-        self.arquivo = Path(arquivo)
+        self._idx_queda = None
+        lista = arquivo if isinstance(arquivo, (list, tuple)) else [arquivo]
+        self.fila = [Path(a) for a in lista]
+        self.arquivo = self.fila[0]
         self.repetir = repetir
         self.limite_seg = max(0, int(limite_seg or 0)) if repetir else 0
         self.ao_acabar_tempo = ao_acabar_tempo
@@ -879,20 +903,40 @@ class Reprisador(Espelhador):
             self._retomar_em = 0.0                  # o ponto ficou além do fim do vídeo: recomeça
         elif pos is not None and dur >= 15:
             self._retomar_em = max(0.0, pos - 5)
+            if self._idx_queda is not None and 0 <= self._idx_queda < len(self.fila):
+                self._retomar_idx = self._idx_queda
+
+    # -------------------------------------------------------- fila de vídeos
+
+    def _nome(self):
+        """Nome para o registro: o vídeo, ou a fila inteira."""
+        if len(self.fila) == 1:
+            return self.arquivo.name
+        return f"a fila de {len(self.fila)} vídeos ({' → '.join(p.name for p in self.fila)})"
+
+    def _continuando(self):
+        if not self._retomar_em:
+            return ""
+        qual = f" do vídeo {self._retomar_idx + 1} da fila" if len(self.fila) > 1 else " do vídeo"
+        return f", continuando de {_hms(self._retomar_em)}{qual}"
+
+    def _msg_fim(self, extra=""):
+        if len(self.fila) == 1:
+            return f"A reprise de {self.arquivo.name} terminou.{extra}"
+        return f"A fila de reprises terminou ({len(self.fila)} vídeos).{extra}"
+
+    def _transmitir_fila(self):
+        return self._transmitir(None, {}, arquivo=self.fila[self._retomar_idx], repetir=self.repetir,
+                                inicio=self._retomar_em, fila=self.fila, inicio_idx=self._retomar_idx)
 
     def executar(self):
-        nome = self.arquivo.name
+        nome = self._nome()
         self._ligar_cronometro()
         recusas_seguidas = 0
         while not self._parar.is_set():
-            if self._retomar_em:
-                self._estado("reprise", f"Reprisando {nome} ({self._jeito()}) na Shopee, continuando de "
-                                        f"{_hms(self._retomar_em)} do vídeo...")
-            else:
-                self._estado("reprise", f"Reprisando {nome} ({self._jeito()}) na Shopee...")
+            self._estado("reprise", f"Reprisando {nome} ({self._jeito()}) na Shopee{self._continuando()}...")
             inicio = time.time()
-            ultimo_erro = self._transmitir(None, {}, arquivo=self.arquivo, repetir=self.repetir,
-                                           inicio=self._retomar_em)
+            ultimo_erro = self._transmitir_fila()
             if self._parar.is_set():
                 break
             dur = int(time.time() - inicio)
@@ -906,7 +950,7 @@ class Reprisador(Espelhador):
                 self._parar.set()
                 return
             if not self.repetir and not self._shopee_recusou:
-                fim = f"A reprise de {nome} terminou."
+                fim = self._msg_fim()
                 if ultimo_erro and dur < 10:
                     fim = f"Não consegui reprisar {nome}: {ultimo_erro}"
                 self._estado("parado", fim, logging.WARNING if dur < 10 else logging.INFO)
@@ -1288,7 +1332,7 @@ class ReprisadorTikTok(Reprisador):
 
     def executar(self):
         import obs_tiktok
-        nome = self.arquivo.name
+        nome = self._nome()
         self._ligar_cronometro()
         falhas = 0
         while not self._parar.is_set():
@@ -1298,11 +1342,9 @@ class ReprisadorTikTok(Reprisador):
             if erro_obs:
                 self._estado("parado", erro_obs, logging.ERROR)
                 return
-            extra = f", continuando de {_hms(self._retomar_em)} do vídeo" if self._retomar_em else ""
-            self._estado("reprise", f"Reprisando {nome} ({self._jeito()}) no TikTok pelo OBS{extra}...")
+            self._estado("reprise", f"Reprisando {nome} ({self._jeito()}) no TikTok pelo OBS{self._continuando()}...")
             inicio = time.time()
-            ultimo_erro = self._transmitir(None, {}, arquivo=self.arquivo, repetir=self.repetir,
-                                           inicio=self._retomar_em)
+            ultimo_erro = self._transmitir_fila()
             if self._parar.is_set():
                 break
             dur = int(time.time() - inicio)
@@ -1313,7 +1355,7 @@ class ReprisadorTikTok(Reprisador):
                                        "Iniciar de novo (o painel reabre o OBS configurado).", logging.ERROR)
                 return
             if not self.repetir and not self._shopee_recusou:
-                fim = f"A reprise de {nome} terminou. Encerre a live no TikTok."
+                fim = self._msg_fim(" Encerre a live no TikTok.")
                 if ultimo_erro and dur < 10:
                     fim = f"Não consegui reprisar {nome}: {ultimo_erro}"
                 self._estado("parado", fim, logging.WARNING if dur < 10 else logging.INFO)
@@ -1327,6 +1369,205 @@ class ReprisadorTikTok(Reprisador):
             self._encerrar_por_tempo()
             return
         self._estado("parado", "Reprise encerrada.")
+
+
+class Gravador:
+    """Só GRAVA uma live, sem transmitir para lugar nenhum (acervo para reprisar depois).
+
+    sentido "ts": grava a live do TikTok na pasta "TikTok para Shopee" (para reprisar na Shopee).
+    sentido "st": grava a live da Shopee na pasta "Shopee para TikTok" (para reprisar no TikTok).
+
+    O vídeo é copiado como chega (sem recodificar: quase não pesa no computador). Se a conexão cair,
+    reconecta e grava a continuação numa parte nova; no fim as partes são emendadas num vídeo só.
+    Termina sozinho quando a plataforma confirma que a live acabou (ou ao clicar em Parar)."""
+
+    ESPERA = 15             # s entre as consultas enquanto a live não começa
+    ESPERA_QUEDA = 5        # s logo depois de uma queda (até 3 min)
+
+    def __init__(self, sentido, cfg, ffmpeg, aviso=None, usuario="", sessionid="", sessao_id=None):
+        self.sentido = "st" if sentido == "st" else "ts"
+        self.cfg = cfg
+        self.ffmpeg = ffmpeg
+        self.aviso = aviso or (lambda estado, msg: None)
+        self.usuario = usuario
+        self.sessionid = sessionid
+        self.sessao_id = sessao_id
+        self._parar = threading.Event()
+        self._proc = None
+        self._motivo = {"texto": "", "codigo": None}
+        self._base = None
+        self._bases = []
+        self.arquivo_atual = None
+        self.desde = None               # quando começou a gravar (a primeira parte)
+        self.partes = 0
+
+    @property
+    def origem(self):
+        return f"@{self.usuario}" if self.sentido == "ts" else f"a live {self.sessao_id} da Shopee"
+
+    def parar(self):
+        self._parar.set()
+        p = self._proc
+        if p and p.poll() is None:
+            try:
+                # "q" no stdin fecha o arquivo direitinho; se não responder, mata
+                p.stdin.write(b"q")
+                p.stdin.flush()
+            except (OSError, ValueError, AttributeError):
+                pass
+            threading.Timer(3, lambda: p.poll() is None and p.kill()).start()
+
+    def _estado(self, estado, msg, nivel=logging.INFO):
+        log.log(nivel, msg)
+        self.aviso(estado, msg)
+
+    # -------------------------------------------------------- onde está a live
+
+    def _link(self):
+        """(url, cabecalhos, nome_para_o_arquivo) se a live estiver no ar, senão None (motivo em self._motivo)."""
+        if self.sentido == "ts":
+            situacao, res = _via_api(self.usuario, self.sessionid, self._motivo)
+            if situacao == "ao_vivo":
+                url, cab = res[0]
+                return url, cab, self.usuario
+            if situacao == "offline":
+                self._motivo["texto"] = f"@{self.usuario} ainda não está ao vivo no TikTok."
+                return None
+            achado = _via_ytdlp(self.usuario, self.sessionid)
+            if achado:
+                return achado[0], achado[1], self.usuario
+            self._motivo["texto"] = f"Não consegui confirmar a live de @{self.usuario}: {res}."
+            return None
+        situacao, info = status_shopee(self.sessao_id)
+        self._motivo["codigo"] = info.get("codigo")
+        if situacao == "ao_vivo":
+            nome = re.sub(r"[^A-Za-z0-9._-]", "", info.get("usuario") or str(self.sessao_id))
+            return info["urls"][0], {"Referer": "https://live.shopee.com.br/"}, "shopee_" + nome
+        if situacao == "erro":
+            self._motivo["texto"] = f"Não consegui consultar a live da Shopee: {info.get('erro')}."
+        elif info.get("codigo") == 2:
+            self._motivo["texto"] = "Essa live da Shopee já acabou. Cada live tem um link próprio: cole o link da live nova."
+        else:
+            self._motivo["texto"] = "A live da Shopee ainda não está no ar."
+        return None
+
+    def _acabou(self):
+        """A plataforma confirma que a live terminou de vez? (pausa não conta)"""
+        if self.sentido == "ts":
+            situacao, _ = status_sala(self.usuario, self.sessionid)
+            return situacao == "encerrada"
+        situacao, info = status_shopee(self.sessao_id)
+        return situacao == "fora_do_ar" and info.get("codigo") == 2
+
+    # -------------------------------------------------------- arquivo
+
+    def _proximo_arquivo(self):
+        pasta = pasta_gravacao(self.sentido)
+        pasta.mkdir(parents=True, exist_ok=True)
+        if (str(pasta), self._base) in _juntando:
+            self._base += "_b"
+        caminho = pasta / f"{self._base}.ts"
+        parte = 2
+        while caminho.exists():
+            caminho = pasta / f"{self._base}_parte{parte}.ts"
+            parte += 1
+        if (pasta, self._base) not in self._bases:
+            self._bases.append((pasta, self._base))
+        return caminho
+
+    def _gravar(self, url, cab, caminho):
+        """Grava até a conexão cair ou clicar em Parar. Devolve quantos bytes foram gravados."""
+        cmd = [self.ffmpeg, "-hide_banner", "-loglevel", "warning", "-nostats"]
+        if cab:
+            cmd += ["-headers", "".join(f"{k}: {v}\r\n" for k, v in cab.items())]
+        cmd += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "3",
+                "-reconnect_on_http_error", "4xx,5xx", "-rw_timeout", "15000000", "-i", url,
+                "-map", "0:v:0?", "-map", "0:a:0?", "-c", "copy", "-f", "mpegts", "-y", str(caminho)]
+        flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        self._proc = proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                             stderr=subprocess.PIPE, creationflags=flags)
+        if self._parar.is_set():
+            proc.kill()
+        ultima = ""
+        for linha in proc.stderr:
+            linha = linha.decode("utf-8", "replace").strip()
+            if linha and linha != ultima:
+                log.debug("gravador: %s", linha)
+                ultima = linha
+        proc.wait()
+        self._proc = None
+        try:
+            tamanho = caminho.stat().st_size
+        except OSError:
+            tamanho = 0
+        if tamanho == 0:
+            try:
+                caminho.unlink()
+            except OSError:
+                pass
+        return tamanho
+
+    # -------------------------------------------------------- laço
+
+    def executar(self):
+        self._estado("aguardando", f"Só gravar: esperando {self.origem} entrar ao vivo...")
+        ultimo_motivo, caiu_em, gravou = None, 0.0, 0
+        try:
+            while not self._parar.is_set():
+                link = self._link()
+                if self._parar.is_set():
+                    break
+                if not link:
+                    if gravou and self._acabou():
+                        break
+                    texto = self._motivo.get("texto") or f"{self.origem} não está ao vivo."
+                    espera = self.ESPERA_QUEDA if time.time() - caiu_em < 180 else self.ESPERA
+                    if texto != ultimo_motivo:
+                        self._estado("aguardando" if not gravou else "reconectando",
+                                     f"Só gravar: {texto} Verificando a cada {espera}s...")
+                        ultimo_motivo = texto
+                    self._parar.wait(espera)
+                    continue
+                ultimo_motivo = None
+                url, cab, nome = link
+                if self._base is None:
+                    self._base = time.strftime("%Y-%m-%d_%Hh%M_") + nome
+                caminho = self._proximo_arquivo()
+                self.arquivo_atual = caminho
+                self.partes += 1
+                if self.desde is None:
+                    self.desde = time.time()
+                self._estado("gravando", f"⏺ Gravando {self.origem} (sem transmitir) em: "
+                                         f"gravacoes\\{caminho.parent.name}\\{caminho.name}")
+                inicio = time.time()
+                tamanho = self._gravar(url, cab, caminho)
+                gravou += tamanho
+                if self._parar.is_set():
+                    break
+                dur = int(time.time() - inicio)
+                caiu_em = time.time()
+                if self._acabou():
+                    break
+                self._estado("reconectando", f"Só gravar: a conexão com {self.origem} caiu depois de "
+                                             f"{dur // 60}min{dur % 60:02d}s. Reconectando (a continuação vai "
+                                             "numa parte nova, emendada no fim)...", logging.WARNING)
+                self._parar.wait(2)
+        finally:
+            self.arquivo_atual = None
+            if gravou:
+                tam = f"{gravou / 1e9:.2f} GB" if gravou >= 1e9 else f"{gravou / 1e6:.0f} MB"
+                self._estado("parado", f"⏹ Gravação de {self.origem} encerrada ({tam}). "
+                                       f"O vídeo fica na pasta \"{pasta_gravacao(self.sentido).name}\".")
+            else:
+                self._estado("parado", f"Gravação de {self.origem} encerrada (nada foi gravado).")
+
+    def juntar_gravacoes(self):
+        bases, self._bases = self._bases, []
+        for pasta, base in bases:
+            try:
+                juntar_partes(self.ffmpeg, pasta, base)
+            except Exception as e:      # noqa: BLE001
+                log.warning("Não consegui juntar as partes da gravação %s (%s). As partes foram mantidas.", base, e)
 
 
 # ---------------------------------------------------------------- gravações

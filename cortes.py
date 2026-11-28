@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 
 import espelho
-from mudo import GRAMATICAS, TAXA_VOZ, _mesclar, achar_palavras, carregar_modelo
+from mudo import TAXA_VOZ, _mesclar, achar_palavras, carregar_modelo, gramatica_json
 
 log = logging.getLogger("espelho")
 
@@ -151,7 +151,7 @@ def achar_mudos(ffmpeg, modelo, arquivo, ini, dur, alvo):
     if r.returncode != 0:
         raise RuntimeError("não consegui ler o áudio: " + (r.stderr.decode("utf-8", "replace").strip()
                                                             .splitlines() or ["sem detalhe"])[-1])
-    rec = vosk.KaldiRecognizer(modelo, TAXA_VOZ, json.dumps(GRAMATICAS[alvo]))
+    rec = vosk.KaldiRecognizer(modelo, TAXA_VOZ, gramatica_json(alvo))
     rec.SetWords(True)
     rec.SetPartialWords(True)
     janelas, bloco = [], TAXA_VOZ * 2 // 10           # 0,1 s de áudio, como na live

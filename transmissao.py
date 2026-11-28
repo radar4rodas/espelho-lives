@@ -28,7 +28,7 @@ from pathlib import Path
 
 import contador
 from mudo import (DESCRICAO_MUDO, GRAMATICAS, TAXA_VOZ, achar_palavras,  # noqa: F401
-                  carregar_modelo, _mesclar)
+                  carregar_modelo, gramatica_json, _mesclar)
 
 log = logging.getLogger("espelho")
 
@@ -302,9 +302,74 @@ def filtro_etiqueta(texto=ETIQUETA_PADRAO):
     if not arquivo.exists():
         arquivo.write_text(texto, encoding="utf-8")
     fonte = ("fontfile=" + _caminho_filtro(_FONTE_ETIQUETA) + ":") if _FONTE_ETIQUETA.exists() else ""
-    # pequena e bem no canto de cima, para não parecer nome de produto
+    # pequena e bem no canto de cima, para não parecer nome de produto;
+    # semitransparente (pedido em 26/11) para não pesar na apresentação, mas ainda legível
     return (f"drawtext={fonte}textfile={_caminho_filtro(arquivo)}:expansion=none:fontsize=h*0.0125:"
-            "fontcolor=white@0.85:box=1:boxcolor=black@0.45:boxborderw=5:x=w-tw-w*0.03:y=h*0.02")
+            "fontcolor=white@0.35:box=1:boxcolor=black@0.12:boxborderw=5:x=w-tw-w*0.03:y=h*0.02")
+
+
+# ---- imagem "Já voltamos!" quando o vídeo do TikTok para de chegar (TikTok -> Shopee)
+# Em 25/11 20:35 o TikTok engasgou (marcou a live como pausada por uns segundos). Sem vídeo para mandar, a
+# Shopee fechou a conexão depois de ~55 s e a live "travou". Agora a Shopee recebe esta imagem com silêncio
+# até o TikTok voltar, e a live emenda sem cair.
+IMAGEM_PAUSA = BASE / "imagens" / "ja_voltamos.png"
+
+
+def cmd_tapa(ffmpeg, cfg, imagem=IMAGEM_PAUSA):
+    """Vídeo com a imagem "Já voltamos!" parada + silêncio, no ritmo real, em MPEG-TS (entra no lugar da origem)."""
+    larg, alt = str(cfg.get("resolucao", "720x1280")).lower().split("x")
+    fps = int(cfg.get("fps", 30))
+    return [ffmpeg, "-hide_banner", "-loglevel", "warning", "-nostdin",
+            "-re", "-loop", "1", "-framerate", str(fps), "-i", str(imagem),
+            "-re", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-vf", f"scale={larg}:{alt}:force_original_aspect_ratio=decrease,"
+                   f"pad={larg}:{alt}:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
+            "-c:v", "libx264", "-preset", "ultrafast", "-tune", "stillimage",
+            "-g", str(fps * 2), "-b:v", "500k", "-c:a", "aac", "-b:a", "64k",
+            "-f", "mpegts", "pipe:1"]
+
+
+# ---- banner "SIGA O PERFIL", fixo ao lado do botão "+ Seguir" da Shopee (lives que vão para a Shopee)
+IMAGEM_SIGA = BASE / "imagens" / "siga_o_perfil.png"
+# Posição em fração do vídeo: x = onde começa a ponta da seta, y = centro da altura, larg = largura do banner.
+# Medida para o nome da loja do dono (o "+ Seguir" anda para a direita com nomes mais compridos) e já
+# descontando o corte das laterais que o celular faz (~9% de cada lado). Outra loja: "banner_siga_x" etc.
+BANNER_SIGA = {"x": 0.53, "y": 0.11, "larg": 0.35}   # y medido em 26/11 num print do celular: linha do nome do perfil
+
+
+def _tamanho_png(caminho):
+    with open(caminho, "rb") as f:
+        cab = f.read(24)
+    return int.from_bytes(cab[16:20], "big"), int.from_bytes(cab[20:24], "big")
+
+
+def banner_siga(cfg, larg, alt, sempre=False):
+    """Medidas do banner em px (x, y, largura, altura), ou None se estiver desligado ou sem a imagem.
+    sempre=True: as medidas mesmo com o banner desligado (ele entra e sai da tela com a live no ar)."""
+    if not IMAGEM_SIGA.exists() or not (sempre or cfg.get("banner_siga", True)):
+        return None
+    try:
+        iw, ih = _tamanho_png(IMAGEM_SIGA)
+        fx = float(cfg.get("banner_siga_x", BANNER_SIGA["x"]))
+        fy = float(cfg.get("banner_siga_y", BANNER_SIGA["y"]))
+        fl = float(cfg.get("banner_siga_larg", BANNER_SIGA["larg"]))
+    except (OSError, TypeError, ValueError):
+        return None
+    bw = max(2, round(larg * fl) // 2 * 2)
+    bh = max(2, round(bw * ih / iw) // 2 * 2)
+    return round(larg * fx), max(0, round(alt * fy - bh / 2)), bw, bh
+
+
+def filtro_banner(cfg, antes, larg, alt):
+    """'antes' + o banner por cima (cadeia para '-vf'; o contador pode vir depois). Sem banner: 'antes'."""
+    b = banner_siga(cfg, larg, alt)
+    if not b:
+        return antes
+    x, y, bw, bh = b
+    img = contador._caminho_filtro(IMAGEM_SIGA)
+    return (f"{antes}[siga_base];movie={img},scale={bw}:{bh}:flags=lanczos,format=rgba[siga_img];"
+            f"[siga_base][siga_img]overlay=x={x}:y={y}:eof_action=repeat:format=auto")
 
 
 def _codificador(ffmpeg, cfg):
@@ -320,8 +385,13 @@ def cmd_saida(cfg, ffmpeg, porta_ts, preview, deslocamento=0.0, etiqueta="", aju
     'deslocamento' faz os tempos deste trecho continuarem de onde o trecho anterior parou.
     etiqueta="texto" (reprise): escreve o texto no vídeo, o que obriga a recodificar ("" = sem etiqueta).
     tela (contador.TelaFFmpeg): desenha o contador "Oferta termina em" (só para a Shopee; obriga a recodificar)."""
+    # Quanto vídeo o processador "estuda" antes de começar. Ao vivo, o vídeo chega começando no meio (sem quadro-
+    # chave): precisa de folga (1,5 s). Na reprise o arquivo começa num quadro-chave e 0,5 s bastam: cada emenda
+    # (vídeo seguinte da fila, volta do loop) ficava ~1,2 s com a imagem parada só por causa disso; agora ~0,2 s
+    # (medido em 28/11).
+    sonda = "500000" if etiqueta else "1500000"
     cmd = [ffmpeg, "-hide_banner", "-loglevel", "warning", "-stats", "-y",
-           "-analyzeduration", "1500000",
+           "-analyzeduration", sonda,
            "-f", "mpegts", "-i", f"tcp://127.0.0.1:{porta_ts}",
            "-map", "0:v:0", "-map", "0:a:0"]
     final = ["-f", "mpegts", "-output_ts_offset", f"{deslocamento:.3f}", "pipe:1"]
@@ -357,15 +427,24 @@ def cmd_saida(cfg, ffmpeg, porta_ts, preview, deslocamento=0.0, etiqueta="", aju
             cmd += ["-map", "0:v:0", "-vf", vf_previa, "-q:v", "6",
                     "-update", "1", "-atomic_writing", "1", preview]
         return cmd
-    if cfg["modo"] == "copiar" and not etiqueta and tela is None:
+    larg, alt = cfg["resolucao"].lower().split("x")
+    banner = banner_siga(cfg, int(larg), int(alt))
+    if cfg["modo"] == "copiar" and not etiqueta and tela is None and not banner:
         cmd += ["-c:v", "copy"]
     else:
-        larg, alt = cfg["resolucao"].lower().split("x")
         fps = int(cfg["fps"])
         vb = int(cfg["bitrate_video_kbps"])
         # a etiqueta vai antes das faixas pretas, para ficar dentro da imagem
         cadeia = (f"scale={larg}:{alt}:force_original_aspect_ratio=decrease{marca},"
                   f"pad={larg}:{alt}:(ow-iw)/2:(oh-ih)/2,fps={fps}")
+        # banner "SIGA O PERFIL" (posição medida na imagem final, já com as faixas). Com a tela do contador, ele vai
+        # junto dela e liga/desliga com a live no ar (botão no painel e no celular); sem ela, fica fixo se ligado.
+        if tela is not None:
+            geo = banner_siga(cfg, int(larg), int(alt), sempre=True)
+            tela.banner = ({"x": geo[0], "y": geo[1], "w": geo[2], "h": geo[3], "img": IMAGEM_SIGA}
+                           if geo else None)
+        else:
+            cadeia = filtro_banner(cfg, cadeia, int(larg), int(alt))
         # o contador vai por cima de tudo (posição medida na imagem final, já com as faixas)
         cmd += ["-vf", tela.filtro(cadeia) if tela is not None else cadeia]
         if tela is not None:
@@ -478,7 +557,8 @@ class Censor:
         vosk.SetLogLevel(-2)
         self.alvo = alvo if alvo in GRAMATICAS else "tiktok"
         self.destino = destino
-        self.rec = vosk.KaldiRecognizer(modelo, TAXA_VOZ, json.dumps(GRAMATICAS[self.alvo]))
+        # ensure_ascii=False: com "é" o Vosk não acha a palavra (só aceita o acento escrito direto)
+        self.rec = vosk.KaldiRecognizer(modelo, TAXA_VOZ, gramatica_json(self.alvo))
         self.rec.SetWords(True)
         self.rec.SetPartialWords(True)
         self.enviar = enviar
@@ -551,13 +631,22 @@ class Transmissao:
     def __init__(self, cfg, ffmpeg, url, cabecalhos, destino, preview=None,
                  aviso=None, sem_janela=False, resumir_stats=None,
                  arquivo=None, repetir=False, gravar_em=None, renovar=None, silencioso=False, inicio=0.0,
-                 salvar_ajuste_voz=None):
+                 salvar_ajuste_voz=None, origem_encerrou=None, fila=None, inicio_idx=0):
         self.cfg = cfg
         self.inicio = max(0.0, float(inicio or 0))   # reprise: começa deste ponto do vídeo (retomada após queda)
         self.posicao_ao_cair = None     # reprise: ponto do vídeo que a Shopee estava mostrando quando acabou
+        self.idx_ao_cair = None         # ... e qual vídeo da fila era
         self.silencioso = silencioso    # tentativas durante a pausa: não enche o registro
         self.ffmpeg = ffmpeg
         self.arquivo = arquivo          # reprise: vídeo local no lugar da live
+        # fila de reprises: os vídeos passam um depois do outro, cada um emendado como um trecho novo
+        # (igual à volta do loop), sem parar o envio para a Shopee/OBS
+        self.fila = [Path(a) for a in fila] if fila else ([Path(arquivo)] if arquivo else [])
+        self._idx_inicial = min(max(0, int(inicio_idx or 0)), max(0, len(self.fila) - 1))
+        if self.fila:
+            self.arquivo = self.fila[self._idx_inicial]
+        self._idx_seg = {}              # trecho -> qual vídeo da fila ele lê
+        self._falhas_fila = 0           # vídeos seguidos que não abriram (para não ficar pulando sem fim)
         self.repetir = repetir          # reprise em loop
         # salva uma cópia do vídeo recebido: caminho, ou função que devolve um caminho novo por trecho
         self.gravar_em = gravar_em
@@ -631,9 +720,18 @@ class Transmissao:
         if lado_contador and not self.para_obs:
             try:
                 larg, alt = str(cfg.get("resolucao", "720x1280")).lower().split("x")
-                self._tela = contador.TelaFFmpeg(lado_contador, int(larg), int(alt))
+                self._tela = contador.TelaFFmpeg(lado_contador, int(larg), int(alt), cfg)
             except Exception as e:
                 log.warning("Não consegui preparar o contador na tela (%s). A live segue sem ele.", e)
+        # "Já voltamos!" no lugar do vídeo do TikTok quando ele para de chegar (só na live TikTok -> Shopee)
+        self.origem_encerrou = origem_encerrou      # função: a origem confirmou que a live acabou?
+        self._tapa_ligado = (not arquivo and not self.para_obs and renovar is not None
+                             and IMAGEM_PAUSA.exists() and cfg.get("tapa_pausa", True))
+        self._tapas = set()             # trechos que são a imagem "Já voltamos!" (não a live)
+        self._tapa_pendente = None      # trecho da imagem que ainda está abrindo
+        self._tapa_desde = None         # quando a imagem entrou no ar
+        self._ultimo_real = None        # quando chegou vídeo de verdade da origem pela última vez
+        self._trocando_desde = None
 
     # -------------------------------------------------------- controle
 
@@ -688,12 +786,14 @@ class Transmissao:
                 log.log(nivel, "Mudo automático ligado: %s. Atraso de %.0fs.", DESCRICAO_MUDO[self.alvo_mudo], self.atraso)
             elif self.atraso:
                 log.log(nivel, "Atraso de %.0fs (mudo automático desligado).", self.atraso)
-            self._iniciar_entrada(self.url, self.cabecalhos, 1, inicio=self.inicio)
+            self._iniciar_entrada(self.url, self.cabecalhos, 1, inicio=self.inicio, idx=self._idx_inicial)
             self._thread(self._escrever_ts)
             if self._vigia_sincronia:
                 self._thread(self._vigiar_sincronia, "sincronia")
             if self._tela is not None:
                 self._thread(self._vigiar_contador, "contador")
+            if self._tapa_ligado:
+                self._thread(self._vigiar_origem, "tapa")
             while not self._parar.is_set():
                 envio = self.envio
                 if envio is not None and envio.poll() is not None:
@@ -708,6 +808,7 @@ class Transmissao:
                 time.sleep(0.3)
         finally:
             self.posicao_ao_cair = self.posicao()
+            self.idx_ao_cair = self._idx_seg.get(self._seg_ativo)
             self.parar()
             for s in (self._srv_ts, self._srv_envio):
                 if s:
@@ -739,16 +840,22 @@ class Transmissao:
 
     # -------------------------------------------------------- entrada (um processo por trecho)
 
-    def _iniciar_entrada(self, url, cabecalhos, seg, inicio=0.0):
+    def _iniciar_entrada(self, url, cabecalhos, seg, inicio=0.0, idx=None):
         srv_voz, porta_voz = _ouvir() if self.modelo else (None, None)
-        # reprise: cada volta do loop é um trecho novo (o arquivo é lido uma vez por trecho)
+        # reprise: cada volta do loop (e cada vídeo da fila) é um trecho novo (o arquivo é lido uma vez por trecho)
+        arquivo = None
+        if self.fila:
+            idx = self._idx_inicial if idx is None else idx
+            arquivo = self.fila[idx]
         proc = subprocess.Popen(
-            cmd_entrada(self.ffmpeg, url, cabecalhos, porta_voz, arquivo=self.arquivo, repetir=False, inicio=inicio),
+            cmd_entrada(self.ffmpeg, url, cabecalhos, porta_voz, arquivo=arquivo, repetir=False, inicio=inicio),
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=self.flags)
         with self._lock:
             self._entradas[seg] = proc
             self._lendo.add(seg)
             self._inicio_seg[seg] = (time.monotonic(), inicio)
+            if arquivo is not None:
+                self._idx_seg[seg] = idx
         self._thread(lambda: self._ler_stderr_entrada(proc, seg))
         self._thread(lambda: self._ler_ts(proc, seg))
         if srv_voz:
@@ -761,9 +868,12 @@ class Transmissao:
             return "da gravação"
         return f"da {self.nome_origem}" if self.para_obs else "do TikTok"
 
-    def _trocar(self, motivo, volta=False):
+    def _trocar(self, motivo, volta=False, contar=True, quieto=False, idx=None):
         """Abre uma conexão nova com a origem; quando o vídeo dela chegar, ela substitui a atual.
-        volta=True: reprise em loop, o vídeo acabou e recomeça do início (não conta como troca).
+        volta=True: reprise, o vídeo acabou e entra o próximo (idx = qual vídeo da fila; no loop com um vídeo
+        só, ele mesmo do início). Não conta como troca.
+        contar=False: tentativa enquanto a imagem "Já voltamos!" está no ar (não conta no limite de trocas).
+        quieto=True: não registra a falta de link (as tentativas se repetem a cada poucos segundos).
         Devolve False se não deu (sem link novo, muitas trocas seguidas, pausa ou parando)."""
         with self._lock:
             if self._trocando or self._parar.is_set() or self._sem_troca or not self.renovar:
@@ -771,16 +881,21 @@ class Transmissao:
             agora = time.monotonic()
             while self._trocas and agora - self._trocas[0] > self.JANELA_TROCAS:
                 self._trocas.popleft()
-            if not volta and len(self._trocas) >= self.MAX_TROCAS:
+            if not volta and contar and len(self._trocas) >= self.MAX_TROCAS:
                 log.warning("A conexão já foi trocada %d vezes em %.0f minutos; vou reconectar do zero.",
                             len(self._trocas), self.JANELA_TROCAS / 60)
                 return False
-            # reprise: ao corrigir o relógio, continua do ponto em que estava (não volta ao começo)
+            # reprise: ao corrigir o relógio, continua do ponto em que estava (não volta ao começo),
+            # no mesmo vídeo da fila
             inicio = 0.0
             if self.arquivo and not volta and self._seg_ativo in self._inicio_seg:
                 quando, pos = self._inicio_seg[self._seg_ativo]
                 inicio = pos + (agora - quando) + 1.0
+                idx = self._idx_seg.get(self._seg_ativo, self._idx_inicial)
+            elif self.arquivo and volta and idx is None:
+                idx = 0
             self._trocando = True
+            self._trocando_desde = agora
         try:
             link = self.renovar()
         except Exception as e:      # noqa: BLE001 - qualquer falha ao pedir o link = não troca
@@ -790,13 +905,21 @@ class Transmissao:
             if not link or self._parar.is_set() or self._sem_troca:
                 self._trocando = False
                 if not link and not self._parar.is_set() and not self._sem_troca:
-                    log.info("Não consegui um link novo da live (%s).", motivo)
+                    log.log(logging.DEBUG if quieto else logging.INFO,
+                            "Não consegui um link novo da live (%s).", motivo)
                 return False
-            if not volta:
+            if not volta and contar:
                 self._trocas.append(agora)
-            seg = max(self._entradas) + 1
+            seg = self._novo_seg()
             self._seg_novo = seg
-        if volta:
+        if volta and len(self.fila) > 1 and idx:
+            log.info("▶ Próximo vídeo da fila (%d de %d): %s. Emendando sem parar a transmissão...",
+                     idx + 1, len(self.fila), self.fila[idx].name)
+        elif volta and len(self.fila) > 1:
+            self.voltas += 1
+            log.info("🔁 A fila chegou ao fim: recomeçando do primeiro vídeo (%s) sem parar a transmissão (volta %d).",
+                     self.fila[0].name, self.voltas)
+        elif volta:
             self.voltas += 1
             log.info("🔁 O vídeo chegou ao fim: recomeçando do início sem parar a transmissão (volta %d).",
                      self.voltas)
@@ -804,17 +927,26 @@ class Transmissao:
             log.info("🔁 Reabrindo o vídeo em %s sem parar a transmissão (%s)...",
                      time.strftime("%H:%M:%S", time.gmtime(inicio)), motivo)
         else:
-            log.info("🔁 Abrindo uma conexão nova %s sem parar a live (%s)...", self._origem(), motivo)
+            log.log(logging.DEBUG if quieto else logging.INFO,
+                    "🔁 Abrindo uma conexão nova %s sem parar a live (%s)...", self._origem(), motivo)
         url, cab = link
-        self._iniciar_entrada(url, cab, seg, inicio=inicio)
+        self._iniciar_entrada(url, cab, seg, inicio=inicio, idx=idx)
         return True
 
     def _ativar(self, seg):
-        """A conexão nova entregou vídeo: passa a ser a atual e a antiga é fechada. (com self._lock)"""
-        antigos = [s for s in self._entradas if s < seg]
+        """A conexão nova entregou vídeo: passa a ser a atual e a antiga é fechada. (com self._lock)
+        A imagem "Já voltamos!" também entra por aqui, mas sem fechar uma conexão nova que ainda está abrindo."""
+        era_tapa = self._seg_ativo in self._tapas
+        tapa = seg in self._tapas
+        if tapa:
+            self._tapa_pendente = None
+            manter = {seg, self._seg_novo}
+        else:
+            self._seg_novo = None
+            self._trocando = False
+            manter = {seg}
+        antigos = [s for s in self._entradas if s not in manter]
         self._seg_ativo = seg
-        self._seg_novo = None
-        self._trocando = False
         for s in antigos:
             p = self._entradas.get(s)
             if p and p.poll() is None:
@@ -822,7 +954,21 @@ class Transmissao:
                     p.kill()
                 except OSError:
                     pass
-        if not self.arquivo:
+        if tapa:
+            if not era_tapa:
+                self._tapa_desde = time.monotonic()
+                log.warning("📺 O vídeo do TikTok parou de chegar. A Shopee está recebendo a imagem \"Já voltamos!\" "
+                            "(sem som) para a live não cair. Buscando a live do TikTok de novo...")
+                # (só a linha do monitor: o estado continua "ao vivo", a Shopee segue no ar)
+                self.aviso("stats", "📺 O vídeo do TikTok parou de chegar: a Shopee está mostrando \"Já voltamos!\" "
+                                    "enquanto busco a live de novo...")
+        elif era_tapa:
+            fora = time.monotonic() - (self._tapa_desde or time.monotonic())
+            self._tapa_desde = None
+            log.info("✅ O vídeo do TikTok voltou depois de %.0fs. A Shopee saiu do \"Já voltamos!\" e a live seguiu "
+                     "sem cair.", fora)
+            self.aviso("stats", "✅ O vídeo do TikTok voltou. Enviando para a Shopee...")
+        elif not self.arquivo:
             log.info("✅ Conexão trocada. A live seguiu sem parar.")
 
     # -------------------------------------------------------- vigia da sincronia da voz
@@ -920,28 +1066,184 @@ class Transmissao:
     def _entrada_acabou(self, seg, recebeu):
         with self._lock:
             self._lendo.discard(seg)
+            if seg in self._tapas:
+                if seg == self._tapa_pendente:
+                    self._tapa_pendente = None
+                if seg != self._seg_ativo or self._parar.is_set():
+                    return                          # imagem já substituída pela live (ou parando)
+                tapa_caiu = not self._sem_troca     # parou sozinha: abre outra; _sem_troca = fim combinado
+            else:
+                tapa_caiu = None
+        if tapa_caiu is False:
+            self._verificar_fim()
+            return
+        if tapa_caiu:
+            log.debug("a imagem \"Já voltamos!\" parou sozinha; abrindo de novo")
+            if not self._iniciar_tapa():
+                self._verificar_fim()
+            return
+        with self._lock:
             if seg == self._seg_novo:               # a conexão nova falhou antes de chegar vídeo
                 self._seg_novo = None
                 self._trocando = False
                 if self._seg_ativo in self._lendo:
-                    log.warning("A conexão nova não entregou vídeo; sigo com a atual.")
+                    if self._seg_ativo in self._tapas:
+                        log.debug("A conexão nova não entregou vídeo; a imagem \"Já voltamos!\" continua.")
+                    else:
+                        log.warning("A conexão nova não entregou vídeo; sigo com a atual.")
                     return
                 tentar = True                       # a atual também já caiu: tenta mais uma
             elif seg != self._seg_ativo:
                 return                              # trecho antigo, já substituído
             else:
                 tentar = recebeu
+        if tentar and self._tapa_ligado and not self._parar.is_set() and not self._sem_troca:
+            # a live do TikTok caiu: a imagem entra na hora (o atraso ainda tem uns segundos de live para sair)
+            # e o vigia da origem fica buscando a live de novo. Se ela voltar, emenda sem a Shopee cair.
+            if self._iniciar_tapa():
+                threading.Thread(target=lambda: self._trocar(f"a conexão {self._origem()} caiu", contar=False),
+                                 daemon=True, name=nome_thread("troca")).start()
+                return
         if self.arquivo:
-            # reprise: o vídeo acabou. Em loop, recomeça emendado; senão, a sessão termina.
-            quando, pos = self._inicio_seg.get(seg, (time.monotonic(), 0))
-            if tentar and self.repetir and not self._parar.is_set():
-                if time.monotonic() - quando < 3 and pos < 1:   # retomado perto do fim: só recomeça
-                    log.warning("O vídeo terminou logo depois de começar (arquivo com problema?). Parei o loop.")
-                else:
-                    self._trocar("fim do vídeo", volta=True)
+            # reprise: o vídeo acabou. Na fila, entra o próximo emendado; em loop, recomeça; senão, a sessão termina.
+            self._proximo_da_fila(seg, recebeu, tentar)
         elif tentar and not self._parar.is_set():
             self._trocar(f"a conexão {self._origem()} caiu")
         self._verificar_fim()
+
+    def _proximo_da_fila(self, seg, recebeu, tentar):
+        """Reprise: o vídeo do trecho `seg` acabou. Abre o próximo da fila (ou o primeiro de novo, em loop)
+        como um trecho novo: o que está no atraso continua saindo e o vídeo novo é emendado sem parar o envio.
+        Um vídeo que não abre (arquivo com defeito) é pulado; se nenhum abrir, para."""
+        if self._parar.is_set():
+            return
+        n = len(self.fila)
+        quando, pos = self._inicio_seg.get(seg, (time.monotonic(), 0))
+        # não entregou nada, ou acabou logo depois de começar do início = arquivo com problema
+        quebrado = not recebeu or (time.monotonic() - quando < 3 and pos < 1)
+        if not tentar and not (quebrado and n > 1):
+            return
+        idx = self._idx_seg.get(seg, self._idx_inicial)
+        prox = idx + 1
+        if prox >= n:
+            if not self.repetir:
+                return                              # era o último vídeo e não está em loop: acabou
+            prox = 0
+        if quebrado:
+            self._falhas_fila += 1
+            if self._falhas_fila >= n:
+                log.warning("O vídeo terminou logo depois de começar (arquivo com problema?). Parei o loop."
+                            if n == 1 else "Nenhum vídeo da fila conseguiu abrir (arquivos com problema?). Parei.")
+                return
+            log.warning("⚠ O vídeo %s não abriu ou terminou logo depois de começar (arquivo com problema?). "
+                        "Pulando para o próximo da fila.", self.fila[idx].name)
+        else:
+            self._falhas_fila = 0
+        self._trocar("fim do vídeo", volta=True, idx=prox)
+
+    # -------------------------------------------------------- imagem "Já voltamos!" (TikTok -> Shopee)
+
+    TAPA_PARADO_SEG = 3.0       # sem vídeo novo do TikTok por isso: a imagem entra (o atraso cobre o resto)
+    TAPA_TENTATIVAS = (3, 5, 5, 8, 10, 15)   # s entre as buscas da live enquanto a imagem está no ar
+    TAPA_MAX_SEG = 600          # o TikTok não voltou em 10 min: para de mandar a imagem
+    TAPA_TROCA_TRAVADA = 20.0   # uma conexão nova que não entrega vídeo nesse tempo é abandonada
+
+    def _novo_seg(self):
+        """Número para um trecho novo (com self._lock). Imagem e conexão nova podem abrir juntas."""
+        self._ultimo_seg = max(getattr(self, "_ultimo_seg", 0), max(self._entradas, default=0)) + 1
+        return self._ultimo_seg
+
+    def _iniciar_tapa(self):
+        """Abre a imagem "Já voltamos!" como um trecho; quando ela entregar vídeo, entra no lugar da live."""
+        with self._lock:
+            if (self._parar.is_set() or self._sem_troca or self._tapa_pendente is not None
+                    or (self._seg_ativo in self._tapas and self._seg_ativo in self._lendo)):
+                return False
+            seg = self._novo_seg()
+            self._tapas.add(seg)
+            self._tapa_pendente = seg
+        try:
+            proc = subprocess.Popen(cmd_tapa(self.ffmpeg, self.cfg), stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=self.flags)
+        except OSError as e:
+            log.warning("Não consegui abrir a imagem \"Já voltamos!\" (%s).", e)
+            with self._lock:
+                self._tapa_pendente = None
+            return False
+        with self._lock:
+            self._entradas[seg] = proc
+            self._lendo.add(seg)
+        self._thread(lambda: self._ler_stderr_entrada(proc, seg))
+        self._thread(lambda: self._ler_ts(proc, seg))
+        if self._parar.is_set():
+            proc.kill()
+        return True
+
+    def _encerrar_tapa(self, motivo):
+        """Para de mandar a imagem: deixa sair o que está no atraso e a sessão termina (o motor decide o resto)."""
+        log.warning(motivo)
+        with self._lock:
+            self._sem_troca = True
+            procs = [self._entradas.get(s) for s in list(self._tapas) + [self._seg_novo] if s is not None]
+        for p in procs:
+            if p and p.poll() is None:
+                try:
+                    p.kill()
+                except OSError:
+                    pass
+
+    def _vigiar_origem(self):
+        """Se o vídeo do TikTok parar de chegar, põe a imagem "Já voltamos!" no ar e fica buscando a live de novo.
+        Quando ela volta, a conexão nova entra no lugar da imagem sem derrubar a Shopee."""
+        tentativas, proxima, fim_visto = 0, 0.0, 0
+        while not self._parar.wait(1.0):
+            agora = time.monotonic()
+            with self._lock:
+                if self._sem_troca:
+                    return
+                no_ar_tapa = self._seg_ativo in self._tapas
+                trocando, desde, novo = self._trocando, self._trocando_desde, self._seg_novo
+                pendente = self._tapa_pendente
+            if not no_ar_tapa:
+                tentativas, proxima, fim_visto = 0, 0.0, 0
+                ult = self._ultimo_real
+                if ult and pendente is None and agora - ult > self.TAPA_PARADO_SEG:
+                    log.info("O vídeo do TikTok parou de chegar há %.0fs (a live pode ter engasgado ou pausado).",
+                             agora - ult)
+                    if self._iniciar_tapa():
+                        proxima = agora + 2
+                continue
+            # a imagem está no ar
+            if self._tapa_desde and agora - self._tapa_desde > self.TAPA_MAX_SEG:
+                self._encerrar_tapa(f"⏹ A live do TikTok não voltou em {self.TAPA_MAX_SEG // 60} minutos. Parei de "
+                                    "mandar a imagem \"Já voltamos!\" para a Shopee.")
+                return
+            if trocando:
+                if novo is not None and desde and agora - desde > self.TAPA_TROCA_TRAVADA:
+                    with self._lock:
+                        p = self._entradas.get(novo)
+                    if p and p.poll() is None:
+                        log.debug("conexão nova %s não entregou vídeo em %.0fs; abandonando", novo, agora - desde)
+                        try:
+                            p.kill()
+                        except OSError:
+                            pass
+                continue
+            if agora < proxima:
+                continue
+            ok = self._trocar("buscando a live do TikTok", contar=False, quieto=True)
+            tentativas += 1
+            proxima = time.monotonic() + self.TAPA_TENTATIVAS[min(tentativas, len(self.TAPA_TENTATIVAS)) - 1]
+            if not ok and self.origem_encerrou:
+                try:
+                    acabou = bool(self.origem_encerrou())
+                except Exception:   # noqa: BLE001
+                    acabou = False
+                fim_visto = fim_visto + 1 if acabou else 0
+                if fim_visto >= 2:
+                    self._encerrar_tapa("⏹ O TikTok confirma que a live acabou. Parei de mandar a imagem "
+                                        "\"Já voltamos!\" para a Shopee.")
+                    return
 
     def _reiniciar_por_relogio(self, onde):
         self._corrigir_origem(f"O relógio do vídeo que vem {onde} bagunçou (isso deixa a live travando e "
@@ -1016,7 +1318,7 @@ class Transmissao:
                 if "Non-monotonic" in linha and vigia.bagunçou() and seg == self._seg_ativo:
                     self._reiniciar_por_relogio(self._origem())
                 continue
-            if (seg != 1 and seg != self._seg_ativo) or _ruido(linha):
+            if (seg != 1 and seg != self._seg_ativo) or seg in self._tapas or _ruido(linha):
                 log.debug("entrada %d: %s", seg, linha)     # conexão nova/antiga, ou aviso sem importância
                 continue
             if seg == 1 and ("Server returned 4" in linha or "HTTP error 4" in linha):
@@ -1048,9 +1350,17 @@ class Transmissao:
                     break
                 with self._lock:
                     if seg != self._seg_ativo:
-                        if seg != self._seg_novo:
+                        if seg != self._seg_novo and seg != self._tapa_pendente:
                             continue                  # conexão antiga, já substituída
                         self._ativar(seg)
+                if seg in self._tapas:
+                    # imagem "Já voltamos!": vai para a Shopee, mas não é gravada nem conta como vídeo da live
+                    recebeu = True
+                    with self._tem_dados:
+                        self._buffer.append((time.monotonic(), seg, dados))
+                        self._tem_dados.notify()
+                    continue
+                self._ultimo_real = time.monotonic()
                 if not recebeu:
                     recebeu = True
                     caminho = self._caminho_gravacao(seg)

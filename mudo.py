@@ -4,6 +4,7 @@ Mudo automático: quais palavras procurar no áudio e onde elas foram ditas (rec
 Usado na live (transmissao.Censor, ao vivo) e nos cortes para Reels (cortes.py, depois da live).
 """
 
+import json
 import logging
 from pathlib import Path
 
@@ -18,12 +19,28 @@ TAXA_VOZ = 16000
 # Saudações também são mutadas nas duas direções (ex.: "boa noite" numa live que sai em outro horário).
 SAUDACOES = {("boa", "noite"): "boa noite", ("boa", "tarde"): "boa tarde", ("bom", "dia"): "bom dia"}
 _FRASES_SAUDACAO = list(SAUDACOES.values())
+# Palavras "isca": comuns e com som parecido com as que são mutadas. Sem elas, o reconhecimento só tinha as
+# frases a mutar e "[unk]" para escolher, e falas como "tira o bocal" / "do local você tira" viravam "tique toque"
+# (mudo à toa no meio da fala). Medido em 28/11 com 40 min de uma live gravada + frases sintetizadas em pontos
+# conhecidos: TikTok -> Shopee, 16 de 16 "TikTok" mutados nos dois casos, mudos à toa de 10 para 1;
+# Shopee -> TikTok, 15 de 16 nos dois casos, mudos à toa caíram para cerca da metade. (Iscas que roubavam
+# "Shopee" de verdade, como "só", "show" e "sopa", ficaram de fora.)
+ISCAS = {
+    "tiktok": ["tira", "tirar", "toca", "toque", "tique", "estoque", "bocal", "local", "tico", "taque", "chique",
+               "dique", "aqui", "que", "o", "a", "e", "de", "você", "ti", "te", "toco", "porque"],
+    "shopee": ["pique", "chique", "pode", "pedir", "copo", "chá", "chão", "jogo", "toque", "aqui", "que", "o", "a",
+               "e", "de", "você", "é"],
+}
 GRAMATICAS = {
-    "tiktok": ["tique toque", "tique toque shop", "tique toque shopping"] + _FRASES_SAUDACAO + ["[unk]"],
+    "tiktok": ["tique toque", "tique toque shop", "tique toque shopping"] + _FRASES_SAUDACAO + ISCAS["tiktok"]
+              + ["[unk]"],
     # Shopee -> TikTok: "Shopee" vira "chope"; "shop"/"shopping" sozinhos; e "Pix" (o modelo não conhece "pix":
     # ouve "piques"). O TikTok Shop trata "pague no Pix" / "na Shopee" como mandar o cliente para fora (aviso de 23/11).
-    "shopee": ["chope", "shop", "shopping", "piques"] + _FRASES_SAUDACAO + ["[unk]"],
+    "shopee": ["chope", "shop", "shopping", "piques"] + _FRASES_SAUDACAO + ISCAS["shopee"] + ["[unk]"],
 }
+# "tique toque" só conta com esta confiança mínima nas duas palavras (os acertos medidos ficaram acima de 0,8;
+# o único mudo à toa que sobrou, abaixo de 0,4)
+CONF_MIN_TIKTOK = 0.5
 # palavra reconhecida -> nome que aparece no registro
 MUDO_SHOPEE = {"chope": "shopee", "shop": "shop", "shopping": "shop", "piques": "pix"}
 DESCRICAO_MUDO = {"tiktok": "'tiktok', 'tiktok shop', 'bom dia', 'boa tarde' e 'boa noite'",
@@ -33,6 +50,11 @@ FOLGA_ANTES = 0.15   # segundos de mudo antes da palavra
 FOLGA_DEPOIS = 0.20  # e depois
 
 _modelo = {"obj": None, "tentou": False}
+
+
+def gramatica_json(alvo):
+    """Gramática no formato do Vosk. ensure_ascii=False: com "é" escapado (\\u00e9) o Vosk não acha a palavra."""
+    return json.dumps(GRAMATICAS[alvo], ensure_ascii=False)
 
 
 def carregar_modelo():
@@ -87,7 +109,8 @@ def achar_palavras(palavras, final, alvo):
         return
     for i in range(len(palavras) - 1):
         a, b = palavras[i], palavras[i + 1]
-        if a["word"] == "tique" and b["word"] == "toque":
+        if (a["word"] == "tique" and b["word"] == "toque"
+                and min(a.get("conf", 1.0), b.get("conf", 1.0)) >= CONF_MIN_TIKTOK):
             ini, fim, nome = a["start"] - FOLGA_ANTES, b["end"] + FOLGA_DEPOIS, "tiktok"
             if i + 2 < len(palavras):
                 c = palavras[i + 2]
