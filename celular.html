@@ -69,6 +69,7 @@
   button:active { transform: scale(.98); }
   button:disabled { opacity: .45; }
   .b-encerrar { background: var(--bad); }
+  .b-marcar { background: linear-gradient(90deg, #f59e0b, #f97316); font-size: 17px; min-height: 62px; margin-bottom: 12px; }
   .b-tudo { background: linear-gradient(90deg, #c4162a, var(--bad)); font-size: 17px; min-height: 62px; }
   .b-ok { background: #fff; color: #000; padding: 10px 18px; min-height: 0; font-size: 14px; width: auto; }
 
@@ -323,6 +324,9 @@
   <button type="button" class="b-encerrar" data-acao="shopee_encerrar"
           data-confirmar="Encerrar a live na Shopee agora?">⏹ Encerrar live na Shopee</button>
 </section>
+
+<!-- sem "tem certeza?": tem que ser um toque rápido, logo depois do momento bom -->
+<button type="button" class="b-marcar" data-acao="marcar">⭐ Marcar momento (corte para Reels)</button>
 
 <button type="button" class="b-tudo" data-acao="encerrar_tudo"
         data-confirmar="Encerrar as DUAS lives (TikTok e Shopee) agora?">⏹ Encerrar as duas lives</button>
@@ -605,7 +609,7 @@ async function atualizarLives() {
 
 document.querySelectorAll("[data-acao]").forEach(b => b.addEventListener("click", async () => {
   if (ocupado) return;
-  if (!confirm(b.dataset.confirmar)) return;
+  if (b.dataset.confirmar && !confirm(b.dataset.confirmar)) return;
   ocupado = true;
   const botoes = document.querySelectorAll("button[data-acao]");
   botoes.forEach(x => x.disabled = true);

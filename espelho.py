@@ -206,6 +206,30 @@ ORDEM_WEBCAST = ["FULL_HD1", "HD1", "SD1", "SD2"]
 motivo = {"texto": ""}
 # Outros links da mesma live, para tentar se o primeiro for recusado
 alternativas = {"lista": []}
+TT_API_ESPERA_BLOQUEIO = 600
+_tt_api_bloqueios = {}
+_lock_tt_api = threading.Lock()
+
+
+def _tiktok_em_bloqueio(usuario):
+    chave = usuario.casefold()
+    agora = time.monotonic()
+    with _lock_tt_api:
+        ate = _tt_api_bloqueios.get(chave, 0)
+        if ate <= agora:
+            _tt_api_bloqueios.pop(chave, None)
+            return False
+        return True
+
+
+def _registrar_bloqueio_tiktok(usuario):
+    with _lock_tt_api:
+        _tt_api_bloqueios[usuario.casefold()] = time.monotonic() + TT_API_ESPERA_BLOQUEIO
+
+
+def _mensagem_bloqueio_tiktok():
+    minutos = (TT_API_ESPERA_BLOQUEIO + 59) // 60
+    return f"TikTok respondeu HTTP 403. Pausando consultas por {minutos} min para não insistir durante o bloqueio."
 
 
 def _via_api(usuario, sessionid, mot=None):
@@ -228,6 +252,8 @@ def _via_api(usuario, sessionid, mot=None):
         r = s.get("https://www.tiktok.com/api-live/user/room/",
                   params={"aid": "1988", "uniqueId": usuario, "sourceType": "54"}, timeout=20)
         if r.status_code != 200:
+            if r.status_code == 403:
+                _registrar_bloqueio_tiktok(usuario)
             return "erro", f"TikTok respondeu HTTP {r.status_code}"
         d = r.json()
     except Exception as e:
@@ -285,6 +311,8 @@ def status_sala(usuario, sessionid=""):
     Retorna ("ao_vivo" | "pausada" | "encerrada" | "erro", código_do_tiktok).
     Código 2 = ao vivo; 3 = pausada (o apresentador pausou); outros = encerrada.
     """
+    if _tiktok_em_bloqueio(usuario):
+        return "erro", None
     try:
         from curl_cffi import requests as creq
         s = creq.Session(impersonate="chrome")
@@ -293,6 +321,8 @@ def status_sala(usuario, sessionid=""):
         r = s.get("https://www.tiktok.com/api-live/user/room/",
                   params={"aid": "1988", "uniqueId": usuario, "sourceType": "54"}, timeout=8)
         if r.status_code != 200:
+            if r.status_code == 403:
+                _registrar_bloqueio_tiktok(usuario)
             return "erro", None
         d = r.json()
     except Exception:
@@ -314,6 +344,11 @@ def obter_stream(usuario, sessionid=""):
     O motivo da última consulta fica em motivo["texto"].
     sessionid: cookie de login do TikTok, necessário para lives com restrição de idade.
     """
+    if _tiktok_em_bloqueio(usuario):
+        alternativas["lista"] = []
+        motivo["texto"] = _mensagem_bloqueio_tiktok()
+        return None
+
     situacao, resultado = _via_api(usuario, sessionid)
     if situacao == "ao_vivo":
         motivo["texto"] = ""
@@ -321,6 +356,11 @@ def obter_stream(usuario, sessionid=""):
         return resultado[0]
     if situacao == "offline":
         motivo["texto"] = f"O TikTok confirma: @{usuario} não está ao vivo agora."
+        return None
+
+    if _tiktok_em_bloqueio(usuario):
+        alternativas["lista"] = []
+        motivo["texto"] = _mensagem_bloqueio_tiktok()
         return None
 
     erro_api = resultado
@@ -483,6 +523,8 @@ class Espelhador:
         self._reiniciar = False          # a última transmissão parou para corrigir o relógio do vídeo
         self._base_gravacao = None
         self._bases_gravadas = []        # (pasta, base) gravados nesta execução: emendados no fim
+        self._partes = []                # (pasta, base, arquivo, quando começou): onde cai cada ⭐ marcação
+        self._marcas = []                # ⭐ momentos marcados (time.time()): viram cortes para Reels no fim
         self._tiktok_encerrou_em = None
 
     # (eram só da reprise; o espelhamento ao vivo também usa quando a conexão cai: sem eles, a queda da Shopee
@@ -507,28 +549,28 @@ class Espelhador:
     def _encerrar_shopee_ligado(self):
         return bool(self.cfg.get("encerrar_shopee") and self.ao_encerrar_tiktok)
 
-    # Antes perguntava ao TikTok a cada ~0,4 s: em ~50 min de live eram milhares de consultas e o TikTok passava
-    # a responder HTTP 403 (bloqueio). Aí, quando a live engasgava, o painel não conseguia reconectar (25/11 20:36).
-    VIGIA_INTERVALO = 3.0        # s entre consultas com a live normal (o fim é percebido em ~3-4 s)
+    # Consultar a cada ~0,4 s (25/11) e depois a cada ~1,4 s (27/11) coincidia com HTTP 403 do TikTok (bloqueio):
+    # aí, quando a live engasgava, o painel não conseguia reconectar. Quando a live acaba o vídeo também para,
+    # e a conferência logo após a queda finaliza na hora.
+    VIGIA_INTERVALO_SEG = 10
     VIGIA_ESPERA_ERRO = (10, 20, 30)   # s depois de 1, 2, 3+ erros seguidos (403 = o TikTok pediu calma)
 
     def _vigiar_fim(self, sessao, usuario, sessionid):
-        """Durante a live, pergunta ao TikTok a cada ~3 s se ela acabou (2 confirmações seguidas)."""
+        """Durante a live, pergunta ao TikTok a cada VIGIA_INTERVALO_SEG se ela acabou (2 confirmações seguidas)."""
         seguidos, avisou_pausa, erros = 0, False, 0
         while not sessao._parar.is_set() and not self._parar.is_set():
             situacao, codigo = status_sala(usuario, sessionid)
-            espera = self.VIGIA_INTERVALO
+            espera = self.VIGIA_INTERVALO_SEG
             if situacao == "encerrada":
                 erros = 0
                 seguidos += 1
                 if seguidos == 1:
                     primeira = time.time()
-                    espera = 1.0            # reconfirma logo
-                elif seguidos >= 2:
-                    self._tiktok_encerrou_em = primeira
-                    log.info("⏹ O TikTok confirmou que a live de @%s acabou (código %s).", usuario, codigo)
-                    sessao.parar()
-                    return
+                    continue                # reconfirma na hora, sem esperar
+                self._tiktok_encerrou_em = primeira
+                log.info("⏹ O TikTok confirmou que a live de @%s acabou (código %s).", usuario, codigo)
+                sessao.parar()
+                return
             elif situacao == "erro":
                 seguidos = 0
                 erros += 1
@@ -540,9 +582,7 @@ class Espelhador:
                     avisou_pausa = True
                 elif situacao == "ao_vivo":
                     avisou_pausa = False
-            fim = time.monotonic() + espera
-            while time.monotonic() < fim and not sessao._parar.is_set() and not self._parar.is_set():
-                time.sleep(0.25)
+            sessao._parar.wait(espera)     # acorda na hora se a transmissão parar
 
     def _finalizar_shopee(self, usuario):
         inicio_fim = self._tiktok_encerrou_em or time.time()
@@ -581,12 +621,24 @@ class Espelhador:
         self._estado("aguardando", f"Monitorando @{usuario}{extra}. Pode começar a live no TikTok.")
         ultimo_motivo = None
         recusas_seguidas = 0
+        # a transmissão caiu e o TikTok não respondeu (ex.: HTTP 403) quando conferi se a live acabou:
+        # sigo conferindo enquanto espero, para finalizar a Shopee assim que o TikTok confirmar o fim
+        fim_a_confirmar = False
         caiu_em = 0.0       # quando a última transmissão parou (logo depois de uma queda, tenta mais rápido)
 
         while not self._parar.is_set():
             stream = obter_stream(usuario, sessionid)
             if self._parar.is_set():
                 break
+            if not stream and fim_a_confirmar:
+                situacao, codigo = status_sala(usuario, sessionid)
+                if situacao == "encerrada":
+                    self._tiktok_encerrou_em = time.time()
+                    log.info("⏹ O TikTok confirmou que a live de @%s acabou (código %s).", usuario, codigo)
+                    self._finalizar_shopee(usuario)
+                    return
+                if situacao != "erro":
+                    fim_a_confirmar = False     # a live continua (ou pausada): só espera ela voltar
             if not stream:
                 texto = motivo["texto"] or f"@{usuario} ainda não está ao vivo."
                 # a live caiu há menos de 3 min: tenta de novo a cada 5 s (antes esperava 20 s com a Shopee parada)
@@ -603,6 +655,7 @@ class Espelhador:
                 # live nova (estava offline antes): novo nome de arquivo de gravação
                 self._base_gravacao = time.strftime("%Y-%m-%d_%Hh%M_") + usuario
             ultimo_motivo = None
+            fim_a_confirmar = False
             links = [stream] + list(alternativas["lista"])
             self._estado("ao_vivo", f"@{usuario} está AO VIVO. Enviando para a Shopee...")
             for n, (url, cabecalhos) in enumerate(links, 1):
@@ -624,6 +677,8 @@ class Espelhador:
                     if situacao == "encerrada":
                         self._tiktok_encerrou_em = time.time()
                         log.info("⏹ O TikTok confirmou que a live de @%s acabou (código %s).", usuario, codigo)
+                    elif situacao == "erro":
+                        fim_a_confirmar = True
                 if self._tiktok_encerrou_em:
                     self._finalizar_shopee(usuario)
                     return
@@ -673,16 +728,40 @@ class Espelhador:
             parte += 1
         if (pasta, base) not in self._bases_gravadas:
             self._bases_gravadas.append((pasta, base))
+        self._partes.append((pasta, base, caminho, time.time()))   # chamado quando chega o 1º dado da parte
         return caminho
+
+    def marcar(self):
+        """⭐ Marca o momento atual para virar corte de Reels no fim da live. Devolve o erro, ou None."""
+        if not self._partes:
+            return "nada está sendo gravado (ligue 'Gravar' antes de iniciar)"
+        self._marcas.append(time.time())
+        return None
+
+    @property
+    def marcas(self):
+        return len(self._marcas)
 
     def juntar_gravacoes(self):
         """Chamado quando a transmissão termina: emenda as partes de cada live gravada num vídeo só."""
         bases, self._bases_gravadas = self._bases_gravadas, []
+        partes, self._partes = self._partes, []
+        marcas, self._marcas = self._marcas, []
+        import cortes
+        try:
+            plano = cortes.planejar(partes, marcas)     # antes de emendar: onde cada ⭐ caiu em cada parte
+        except Exception as e:          # noqa: BLE001
+            log.warning("🎬 Não consegui preparar os cortes para Reels (%s).", e)
+            plano = []
         for pasta, base in bases:
             try:
                 juntar_partes(self.ffmpeg, pasta, base)
             except Exception as e:      # nunca pode atrapalhar o painel; as partes ficam como estão
                 log.warning("Não consegui juntar as partes da gravação %s (%s). As partes foram mantidas.", base, e)
+        try:
+            cortes.gerar(self.ffmpeg, plano)
+        except Exception as e:          # noqa: BLE001
+            log.warning("🎬 Não consegui fazer os cortes para Reels (%s).", e)
 
     def ajustar_voz(self, ms):
         """Shopee -> TikTok: muda, com a live no ar, quanto a imagem é atrasada para casar com a voz.

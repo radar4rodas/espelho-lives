@@ -25,7 +25,7 @@ Além de retransmitir, ele:
 - **reconecta sozinho** se a conexão cair, sem derrubar a live do outro lado;
 - **encerra a live do destino** quando a de origem acaba (pela extensão do Chrome);
 - **encerra só a live afetada** se aparecer um aviso de restrição da plataforma;
-- **grava** as lives e permite **reprisar** a gravação, sempre com a etiqueta "REPRISE" visível;
+- **grava** as lives e permite **reprisar** a gravação, com uma etiqueta no canto (ligada por padrão, texto escolhido no painel);
 - mostra um **contador "Oferta termina em"** dentro do vídeo;
 - tem uma **página para o celular** (no Wi-Fi de casa) com números da live, chat, resposta e botões de encerrar;
 - manda **notificações no celular** (app ntfy) com erros e perguntas de clientes.
@@ -60,9 +60,12 @@ Além de retransmitir, ele:
 | `iniciar.bat` | **Por onde tudo começa.** Atualiza as bibliotecas (principalmente o yt-dlp) e abre o painel. |
 | `painel.py` + `painel.html` | O painel no navegador: campos, botões Iniciar/Parar, monitor, registro, contador. |
 | `espelho.py` | O "cérebro": acha o link do vídeo do TikTok/Shopee, vigia se a live está no ar, pausa, fim, quedas e reconexões. Também lê e salva o `config.json`. |
-| `transmissao.py` | Monta e controla os processos do **ffmpeg**: atraso, mudo por reconhecimento de voz (Vosk), troca de conexão sem pausa, gravação, emenda das partes, reprise em loop, etiqueta "REPRISE" e contador no vídeo. |
+| `transmissao.py` | Monta e controla os processos do **ffmpeg**: atraso, mudo por reconhecimento de voz (Vosk), troca de conexão sem pausa, gravação, emenda das partes, reprise em loop, etiqueta da reprise e contador no vídeo. |
 | `obs_tiktok.py` | Para Shopee → TikTok: cria o perfil e a cena **"EspelhoTikTok"** no OBS, abre o OBS e liga a câmera virtual. O som vai para o "CABLE Input". |
 | `sincronia.py` | Grava alguns segundos do que sai do OBS e compara com o original para corrigir sozinho o atraso da voz no TikTok. |
+| `cortes.py` | Cortes para Reels: no fim da live, cada ⭐ marcação vira um vídeo vertical de ~45 s, em versão TikTok e versão Shopee Vídeo, cada uma com o seu mudo. |
+| `mudo.py` | Quais palavras o mudo procura e onde foram ditas (reconhecimento de voz Vosk). Usado na live e nos cortes. |
+| `tests/` | Testes: `python -m unittest discover -s tests`. |
 | `contador.py` + `contador.html` | O contador "Oferta termina em": desenhado pelo ffmpeg na Shopee e por uma camada transparente do OBS no TikTok. |
 | `extensao.py` | Servidor local (porta 8766) que conversa com a extensão do Chrome. |
 | `extensao_shopee/` | **Extensão do Chrome** (versão 1.13): pega URL e chave da Shopee, clica em Finalizar/Encerrar, lê avisos de restrição, lê e envia comentários, lê os números do Gerenciador de LIVE e deixa o som limpo no TikTok. |
@@ -156,10 +159,16 @@ A aba do painel no navegador pode ser fechada e aberta à vontade.
 ### Reprise
 
 Nas sub-abas **Reprisar gravação**: escolha o vídeo, se quer repetir em loop e por quanto tempo, e clique em
-Iniciar. Toda reprise sai com a etiqueta **"REPRISE"** no canto, para quem assiste saber que é gravação.
+Iniciar. Por padrão a reprise sai com a etiqueta **"REPRISE"** no canto, para quem assiste saber que é gravação; na etapa Gravação dá para desligar ou trocar o texto.
 - **Fila:** clicando em vários vídeos, na ordem, eles passam em sequência, emendados sem parar a live (cada vídeo
   entra como um "trecho" novo, igual à volta do loop). O número em cada vídeo mostra a ordem.
 - Vídeos com 1 hora ou mais aparecem com o tempo em verde.
+
+### Cortes para Reels
+
+Durante a live, aperte **⭐ Marcar** (painel ou celular) logo depois de um momento bom. No fim da live, cada
+marcação vira um vídeo vertical em `gravacoes\Cortes\`, em versão TikTok e versão Shopee Vídeo. Precisa de
+"Gravar" ligado. Detalhes no [LEIA-ME.md](LEIA-ME.md).
 
 ### Só gravar
 

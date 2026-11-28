@@ -158,16 +158,18 @@ O mesmo vale em **Shopee → TikTok → Reprisar gravação** (loop emendado e t
 O atraso, o mudo automático e a qualidade valem também para a reprise. Use **Abrir pasta**
 para ver os arquivos e **Atualizar lista** depois de colocar um vídeo novo lá.
 
-**Etiqueta "REPRISE":** toda reprise (para a Shopee e para o TikTok) sai com uma etiqueta pequena
-**"REPRISE"** no canto de cima, à direita, para quem assiste saber que é uma live gravada. Ela
-aparece também na prévia do painel. A live espelhada ao vivo não tem etiqueta. Para escrever a
-etiqueta, o vídeo da reprise é sempre refeito, mesmo no modo "copiar".
+**Etiqueta da reprise:** por padrão a reprise (para a Shopee e para o TikTok) sai com uma etiqueta
+pequena **"REPRISE"** no canto de cima, à direita, para quem assiste saber que é uma live gravada. Ela
+aparece também na prévia do painel. Na etapa **Gravação** você escolhe, para cada lado, se mostra a
+etiqueta (**"Mostrar etiqueta no vídeo"**) e o que vai escrito nela (até 40 letras). Com a etiqueta
+ligada o vídeo da reprise é sempre refeito, mesmo no modo "copiar"; desligada, o modo "copiar" manda o
+vídeo como está e pesa bem menos no computador. A live espelhada ao vivo nunca tem etiqueta.
 
 **Se a conexão cair no meio da reprise:** o painel reconecta e **continua do ponto onde estava**
 (uns 5 s antes), em vez de voltar ao começo do vídeo. Se a página da Shopee não estiver mais ao
 vivo, o registro avisa que a própria Shopee encerrou a live; aí é preciso criar uma live nova.
 
-> Reprise é sempre um vídeo gravado: deixe a etiqueta e use só com lives suas. Confira as regras
+> Reprise é sempre um vídeo gravado: use só com lives suas. Confira as regras
 > da Shopee Live e do TikTok Shop sobre lives gravadas.
 
 ## Rodar os dois sentidos ao mesmo tempo
@@ -305,6 +307,31 @@ plataforma mostra. Fica **vermelho no último minuto** e **some da tela quando z
 clicar em Iniciar: o painel reabre o OBS com a cena nova (com a camada "Contador"). Se o OBS abrir com a cena
 antiga, o registro avisa.
 
+## Cortes para Reels (⭐ Marcar momento)
+
+Durante a live, aperte **⭐ Marcar este momento** (painel do PC, quadro "🎬 Cortes para Reels") ou
+**⭐ Marcar momento** (celular, logo acima de "Encerrar as duas lives") **logo depois** de um momento bom:
+uma demonstração que deu certo, uma reação, a hora em que o chat acelerou.
+
+Quando a live termina, cada marcação vira um **vídeo vertical 1080x1920 de ~45 s** (35 s antes do toque e
+10 s depois), em **duas versões**:
+
+| Arquivo | Para postar em | Mutado no corte |
+|---|---|---|
+| `corte01_tiktok.mp4` | TikTok | "shopee", "shop", "pix", "bom dia", "boa tarde", "boa noite" |
+| `corte01_shopee.mp4` | Shopee Vídeo | "tiktok", "tiktok shop", "bom dia", "boa tarde", "boa noite" |
+
+- Ficam em **`gravacoes\Cortes\<nome da live>\`**. Uma notificação (ntfy) avisa quando ficam prontos.
+- Precisa de **"Gravar" ligado** e do modelo de voz instalado: sem ele os cortes não são feitos, porque
+  iriam com as palavras proibidas.
+- Marca nos dois sentidos de uma vez, se os dois estiverem gravando.
+- Dois toques em menos de 15 s contam como o mesmo momento.
+- Um toque com a live parada, ou antes de começar a gravar, não vira corte.
+- Os cortes são feitos com prioridade baixa no computador (cerca de 15 s por versão): não atrapalham a
+  outra live, se ela continuar no ar.
+- O mudo dos cortes usa o mesmo reconhecimento de voz da live. Assista antes de postar: uma palavra dita
+  de um jeito diferente pode passar.
+
 ## Card "SIGA O PERFIL" (liga e desliga, igual ao contador)
 
 Um card branco com **"SIGA O PERFIL — e não perca nenhuma oferta!"** que você coloca no vídeo por um tempo e tira
@@ -421,8 +448,13 @@ Marque **"Lembrar neste computador"** para não precisar colar toda vez. Ele fic
 
 - **Fica em "Aguardando" mesmo com a live aberta**: confira o @. Se estiver certo, o TikTok
   pode ter mudado o site. Feche e abra pelo `iniciar.bat` para atualizar o yt-dlp.
+- **TikTok respondeu HTTP 403**: o painel pausa novas consultas por 10 minutos para não insistir
+  durante o bloqueio. Não reinicie o painel nem atualize a página repetidamente; aguarde e teste
+  tiktok.com no navegador. Se o próprio site continuar em 403, é uma restrição do TikTok que o
+  painel não consegue remover.
 - **"AO VIVO" mas a Shopee não mostra nada / fica reconectando**: a URL ou a chave estão
-  erradas, ou a live na Shopee não foi criada. O motivo aparece no quadro de registro.
+  erradas, ou a live na Shopee foi encerrada. Se o registro disser que a página da live não está
+  mais no ar, crie outra live na Shopee e use a URL e a chave novas.
 - **Imagem travando**: escolha a qualidade 720p.
 - **Uma palavra passou sem mutar**: aumente o atraso (por exemplo para 10 s) e veja no
   registro se apareceu "detectado tarde demais".

@@ -87,6 +87,8 @@ def executar_acao(painel, acao):
             return {"ok": True, "detalhe": "As duas lives foram encerradas."}
         return {"ok": False, "detalhe": "Não consegui encerrar: " + " e ".join(
             f"{n} ({(res.get(n) or {}).get('detalhe', 'sem resposta')})" for n in falhas)}
+    if acao == "marcar":
+        return painel.marcar()
     if acao == "ntfy_teste":
         return notificacoes.testar()
     if acao == "alarme_ok":
@@ -317,7 +319,8 @@ def resumo(painel, desde_log, desde_aviso=0):
                         "ao_vivo_seg": int(time.time() - l.ao_vivo_desde) if l.ao_vivo_desde else None,
                         "alarme": l.alarme, "alarme_tipo": l.alarme_tipo, "alarme_detalhe": l.alarme_detalhe,
                         "pausa": l.pausa if l.esp is not None else False,
-                        "tipo_ativo": l.tipo_ativo if l.esp is not None else None}
+                        "tipo_ativo": l.tipo_ativo if l.esp is not None else None,
+                        "marcas": getattr(l.esp, "marcas", 0) if l.esp is not None else 0}
         logs = [l for l in painel.logs if l["id"] > desde_log][-60:]
     return {"lados": lados, "logs": logs,
             "tiktok": {**ponte.status_tiktok, "ultima": _ultima_acao["tiktok"]},
