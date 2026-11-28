@@ -35,8 +35,75 @@ LARANJA = (238, 77, 45)
 PASTA = Path(tempfile.gettempdir()) / "espelho_contador"
 FONTES = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
 
+# Card "SIGA O PERFIL": liga e desliga pelo painel (ou celular), igual ao contador, e fica na tela até desligar.
+# A imagem pode ser trocada por outra do mesmo nome (PNG com fundo transparente).
+IMAGEM_CARD = Path(__file__).resolve().parent / "imagens" / "card_siga.png"
+# posição (canto de cima, à esquerda) e largura, em fração da imagem 9:16: à esquerda, logo abaixo do contador.
+# Dá para mudar no config.json: "card_siga_x", "card_siga_y", "card_siga_larg".
+CARD = {"x": 0.11, "y": 0.375, "larg": 0.42}
+
 _lock = threading.Lock()
 _estado = {"ts": {"fim": None, "total": 0}, "st": {"fim": None, "total": 0}}
+_card = {"ts": False, "st": False}
+
+
+def posicao_card(cfg=None):
+    """{x, y, larg} do card (fração da imagem), com o que estiver no config.json."""
+    if cfg is None:
+        try:
+            import json
+            cfg = json.loads((Path(__file__).resolve().parent / "config.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            cfg = {}
+    pos = dict(CARD)
+    for k in pos:
+        try:
+            pos[k] = min(1.0, max(0.0, float(cfg.get("card_siga_" + k, pos[k]))))
+        except (TypeError, ValueError):
+            pass
+    return pos
+
+
+def _tamanho_png(caminho):
+    with open(caminho, "rb") as f:
+        cab = f.read(24)
+    return struct.unpack(">II", cab[16:24])
+
+
+# Banner "SIGA O PERFIL" (ao lado do + Seguir, só no vídeo da Shopee): liga e desliga com a live no ar, por comando
+# no ffmpeg (igual ao card). O estado fica guardado no config.json ("banner_siga") para a próxima live.
+_banner = {"ligado": None}
+
+
+def banner_ligado():
+    with _lock:
+        if _banner["ligado"] is not None:
+            return _banner["ligado"]
+    try:
+        import json
+        cfg = json.loads((Path(__file__).resolve().parent / "config.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        cfg = {}
+    with _lock:
+        if _banner["ligado"] is None:
+            _banner["ligado"] = bool(cfg.get("banner_siga", True))
+        return _banner["ligado"]
+
+
+def ligar_banner(ligado):
+    with _lock:
+        _banner["ligado"] = bool(ligado)
+
+
+def ligar_card(lado, ligado):
+    if lado in _card:
+        with _lock:
+            _card[lado] = bool(ligado)
+
+
+def card_ligado(lado):
+    with _lock:
+        return bool(_card.get(lado))
 
 
 # ---------------------------------------------------------------- estado
@@ -77,20 +144,46 @@ def estado(lado, agora=None):
 
 
 def resumo():
-    return {lado: estado(lado) for lado in _estado}
+    """Estado do contador de cada lado, com o card junto ("card": ligado?, "card_pos": onde fica)."""
+    pos = posicao_card()
+    banner = banner_ligado()
+    return {lado: {**estado(lado), "card": card_ligado(lado), "card_pos": pos, "banner": banner and lado == "ts"}
+            for lado in _estado}
 
 
 ONDE = {"ts": "na live da Shopee", "st": "na live do TikTok"}
 
 
 def acao(dados, origem="pelo computador"):
-    """Pedido do painel ou do celular: {lado, acao: "iniciar"|"parar", segundos}."""
+    """Pedido do painel ou do celular: {lado, acao: "iniciar"|"parar"|"card_ligar"|"card_desligar", segundos}."""
     import logging
     import espelho                      # (aqui dentro: o espelho não precisa deste módulo para carregar)
     dados = dados if isinstance(dados, dict) else {}
     lado = dados.get("lado")
     if lado not in _estado:
         return {"ok": False, "erro": "Escolha a live (Shopee ou TikTok)."}
+    if dados.get("acao") in ("banner_ligar", "banner_desligar"):
+        if lado != "ts":
+            return {"ok": False, "erro": "O banner SIGA O PERFIL é só da live da Shopee."}
+        ligar = dados["acao"] == "banner_ligar"
+        ligar_banner(ligar)
+        try:                                        # vale também para a próxima live
+            cfg = espelho.ler_config()
+            cfg["banner_siga"] = ligar
+            espelho.salvar_config(cfg)
+        except OSError:
+            pass
+        espelho.log.log(logging.INFO, "📌 Banner \"SIGA O PERFIL\" %s na live da Shopee (%s).",
+                        "na tela" if ligar else "tirado da tela", origem, extra={"lado": "ts"})
+        return {"ok": True, "contador": resumo()}
+    if dados.get("acao") in ("card_ligar", "card_desligar"):
+        ligar = dados["acao"] == "card_ligar"
+        if ligar and not IMAGEM_CARD.exists():
+            return {"ok": False, "erro": "A imagem do card (imagens\\card_siga.png) não foi encontrada."}
+        ligar_card(lado, ligar)
+        espelho.log.log(logging.INFO, "📣 Card \"SIGA O PERFIL\" %s %s (%s).", "na tela" if ligar else "tirado da tela",
+                        ONDE[lado], origem, extra={"lado": lado})
+        return {"ok": True, "contador": resumo()}
     if dados.get("acao") == "parar":
         parar(lado)
         espelho.log.log(logging.INFO, "⏱ Contador tirado da tela %s (%s).", ONDE[lado], origem, extra={"lado": lado})
@@ -229,7 +322,7 @@ class TelaFFmpeg:
     REPETIR_SEG = 4.0      # de tempos em tempos repete o estado do que está na tela (se um comando se perdeu)
     CORES = {"texto_b": "0x3D3D3A", "tempo_b": "0x2C2C2A"}
 
-    def __init__(self, lado, largura, altura):
+    def __init__(self, lado, largura, altura, cfg=None):
         self.lado = lado
         self.largura, self.altura = int(largura), int(altura)
         self.md = medidas(self.largura, self.altura)
@@ -237,6 +330,20 @@ class TelaFFmpeg:
         self._mandado = {}              # elemento -> valor que o ffmpeg já tem
         self._quando_repetiu = 0.0
         self._fase_mandada = None
+        # banner "SIGA O PERFIL" ao lado do + Seguir: {x, y, w, h, img} (quem preenche é o cmd_saida, que sabe a posição)
+        self.banner = None
+        # card "SIGA O PERFIL": uma imagem que entra e sai da tela (overlay x), igual ao fundo do contador
+        self.card = None
+        try:
+            if IMAGEM_CARD.exists():
+                pos = posicao_card(cfg)
+                iw, ih = _tamanho_png(IMAGEM_CARD)
+                cw = max(2, round(self.largura * pos["larg"]) // 2 * 2)
+                ch = max(2, round(cw * ih / iw) // 2 * 2)
+                self.card = {"x": round(self.largura * pos["x"]), "y": round(self.altura * pos["y"]),
+                             "w": cw, "h": ch}
+        except (OSError, struct.error, ZeroDivisionError):
+            self.card = None
 
     def _desejado(self):
         """Como cada elemento deve estar agora. Devolve (fase, {elemento: valor})."""
@@ -251,12 +358,17 @@ class TelaFFmpeg:
         else:
             cor_texto = cor_tempo = oculto
         tempo = e["tempo"] if fase in ("normal", "urgente") else self._mandado.get("tempo", ("00:00", ""))[0]
-        return fase, {
+        quero = {
             "branco": x if fase == "normal" else self.FORA,
             "vermelho": x if fase == "urgente" else self.FORA,
             "texto": (e["texto"], cor_texto),
             "tempo": (tempo, cor_tempo),
         }
+        if self.card:
+            quero["card"] = self.card["x"] if card_ligado(self.lado) else self.FORA
+        if self.banner:
+            quero["banner"] = self.banner["x"] if banner_ligado() else self.FORA
+        return fase, quero
 
     @staticmethod
     def _visivel(valor):
@@ -265,6 +377,10 @@ class TelaFFmpeg:
         return valor != TelaFFmpeg.FORA
 
     def _comando(self, elem, valor):
+        if elem == "card":
+            return f"coverlay@card_siga -1 x {valor}\n"
+        if elem == "banner":
+            return f"coverlay@banner_siga -1 x {valor}\n"
         if elem in ("branco", "vermelho"):
             return f"coverlay@cont_{elem} -1 x {valor}\n"
         texto, cor = valor
@@ -302,10 +418,23 @@ class TelaFFmpeg:
         for n in ("branco", "vermelho"):
             partes.append(f"movie={_caminho_filtro(self.fundos[n])}[cont_img_{n}]")
         cadeia = "[cont_base]"
+        if self.banner:
+            bn = self.banner
+            partes.append(f"movie={_caminho_filtro(bn['img'])},scale={bn['w']}:{bn['h']}:flags=lanczos,format=rgba[banner_img]")
+            partes.append(f"{cadeia}[banner_img]overlay@banner_siga=x={quero['banner']}:y={bn['y']}:eof_action=repeat"
+                          "[banner_o]")
+            cadeia = "[banner_o]"
         for i, n in enumerate(("branco", "vermelho")):
             saida = f"[cont_o{i}]"
             partes.append(f"{cadeia}[cont_img_{n}]overlay@cont_{n}=x={quero[n]}:y={y_fundo}:eof_action=repeat{saida}")
             cadeia = saida
+        if self.card:
+            cd = self.card
+            partes.append(f"movie={_caminho_filtro(IMAGEM_CARD)},scale={cd['w']}:{cd['h']}:flags=lanczos,"
+                          "format=rgba[card_img]")
+            partes.append(f"{cadeia}[card_img]overlay@card_siga=x={quero['card']}:y={cd['y']}:eof_action=repeat"
+                          "[card_o]")
+            cadeia = "[card_o]"
 
         def texto(elem, fonte, tam, y, x=None):
             t, cor = quero[elem]

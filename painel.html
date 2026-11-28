@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Espelho de Live</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23ff7a45'/%3E%3Cstop offset='1' stop-color='%23ee4d2d'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='9' fill='url(%23g)'/%3E%3Cpath d='M12 9.5v13l11-6.5z' fill='white'/%3E%3C/svg%3E">
+<title>Black Mirror · painel de lives</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 34 34'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%233a3c43'/%3E%3Cstop offset='.5' stop-color='%230a0b0d'/%3E%3Cstop offset='1' stop-color='%231c1d21'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect x='1' y='1' width='32' height='32' rx='9' fill='url(%23g)' stroke='%23555'/%3E%3Cpath d='M20 6 L17.5 13 L22 16 L16 21 L18.5 28 M17.5 13 L11 11 M22 16 L28 18 M16 21 L9 24' fill='none' stroke='%23fff' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M3 3 L14 3 L3 12 Z' fill='rgba(255,255,255,.12)'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -19,11 +19,17 @@
     --live: #ff4d4f; --live-soft: rgba(255, 77, 79, .13);
     --wait: #ffb020; --wait-soft: rgba(255, 176, 32, .12);
     --ok: #2fd27f; --ok-soft: rgba(47, 210, 127, .13); --ok-line: rgba(47, 210, 127, .4); --err: #ff6b6b; --err-soft: rgba(255, 107, 107, .12);
-    --blue: #6fd0ff; --blue-soft: rgba(80, 190, 255, .13);
+    --blue: #ff6b8a; --blue-soft: rgba(254, 44, 85, .14);   /* cor do lado Shopee -> TikTok (rosa do TikTok) */
     --r: 18px; --r-sm: 11px;
     --brilho: linear-gradient(180deg, rgba(255, 255, 255, .025), rgba(255, 255, 255, 0) 120px);
     --sombra: 0 1px 0 rgba(255, 255, 255, .03) inset, 0 24px 48px -32px rgba(0, 0, 0, .9);
     color-scheme: dark;
+  }
+  /* Shopee -> TikTok aberto: tudo no ROSA do TikTok (TikTok -> Shopee continua laranja). As variáveis "orange" viram rosa. */
+  body.lado-st {
+    --orange: #fe2c55; --orange-2: #ff5c82; --orange-soft: rgba(254, 44, 85, .13);
+    --orange-glow: rgba(254, 44, 85, .38); --orange-text: #ff6b8a; --orange-line: rgba(254, 44, 85, .4);
+    --grad: linear-gradient(135deg, #ff4f7a 0%, #fe2c55 100%);
   }
   * { box-sizing: border-box; }
   html { background: var(--bg); scroll-behavior: smooth; }
@@ -37,6 +43,24 @@
     background-attachment: fixed;
   }
   ::selection { background: var(--orange); color: #fff; }
+  /* partes com o laranja escrito direto: versão rosa (com um toque do ciano do TikTok) para o lado Shopee -> TikTok */
+  body.lado-st {
+    background:
+      radial-gradient(1000px 460px at 8% -14%, rgba(254, 44, 85, .12), transparent 60%),
+      radial-gradient(700px 360px at 100% -6%, rgba(37, 244, 238, .05), transparent 60%),
+      var(--bg);
+    background-attachment: fixed;
+  }
+  body.lado-st header::after { background: linear-gradient(90deg, transparent, rgba(254, 44, 85, .55) 30%, rgba(37, 244, 238, .35) 70%, transparent); }
+  body.lado-st .modo.ativa { background: linear-gradient(180deg, rgba(254, 44, 85, .09), rgba(254, 44, 85, 0) 70%), var(--card); }
+  body.lado-st select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23ff6b8a' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); }
+  body.lado-st .btn.link:hover:not(:disabled), body.lado-st details.mais summary:hover { color: #ff9db2; }
+  body.lado-st .opcao:has(input:checked) { border-color: rgba(254, 44, 85, .28); background: linear-gradient(90deg, rgba(254, 44, 85, .06), transparent 60%), var(--bg-2); }
+  body.lado-st .lista-gravacoes .gravacao.sel, body.lado-st .gravacao.sel { background: linear-gradient(90deg, rgba(254, 44, 85, .08), transparent 70%), var(--card); }
+  body.lado-st .tela { background: radial-gradient(circle at 50% 42%, rgba(254, 44, 85, .07), transparent 60%),
+                                   repeating-linear-gradient(135deg, #111319 0 10px, #0f1116 10px 20px); }
+  body.lado-st.ao-vivo .tela { border-color: rgba(254, 44, 85, .55); }
+  body.lado-st .lista-mudos li { border-color: rgba(254, 44, 85, .3); }
   button, input, select { font: inherit; }
   [hidden] { display: none !important; }
   @keyframes pulsar { 50% { opacity: .3; } }
@@ -52,12 +76,12 @@
   }
   .topo { max-width: 1200px; margin: 0 auto; padding: 12px 28px; display: flex; align-items: center; gap: 16px; }
   .marca { display: flex; align-items: center; gap: 11px; margin-right: auto; }
-  .logo {
-    width: 36px; height: 36px; border-radius: 11px; background: var(--grad); display: grid; place-items: center; flex: none;
-    box-shadow: 0 6px 18px -4px var(--orange-glow), 0 0 0 1px rgba(255, 255, 255, .08) inset;
-  }
-  .logo svg { width: 18px; height: 18px; }
-  .marca h1 { margin: 0; font-size: 17px; font-weight: 800; letter-spacing: -.02em; }
+  /* marca BLACK MIRROR: tela preta com rachadura */
+  .logo { width: 36px; height: 36px; flex: none; display: block; filter: drop-shadow(0 6px 14px rgba(0, 0, 0, .6)); }
+  .logo svg { width: 36px; height: 36px; display: block; }
+  .marca h1 { margin: 0; font-size: 15px; font-weight: 800; letter-spacing: .38em; line-height: 1; }
+  .marca .sub-marca { display: block; font: 500 10.5px "JetBrains Mono", monospace; color: var(--muted); letter-spacing: .14em;
+                      text-transform: uppercase; margin-top: 5px; }
   .chips { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
   .pill {
     display: inline-flex; align-items: center; gap: 7px; padding: 5px 11px; border-radius: 999px;
@@ -274,6 +298,15 @@
   .gravacao .nome { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
   .gravacao .info { font-size: 11.5px; color: var(--muted); }
   .gravacao .dur { font-weight: 800; color: var(--orange-text); font-variant-numeric: tabular-nums; font-size: 13px; }
+  /* vídeos com 1 hora ou mais: tempo em verde, para achar rápido */
+  .gravacao .dur.longa { color: var(--ok); }
+  /* fila de reprises: o número mostra a ordem em que os vídeos passam */
+  .gravacao .ordem { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--line-2); display: grid; place-items: center;
+                     font-size: 11.5px; font-weight: 800; color: #fff; font-variant-numeric: tabular-nums; }
+  .gravacao.sel .ordem { border-color: transparent; background: var(--grad); box-shadow: 0 4px 10px -4px var(--orange-glow); }
+  .resumo-fila { display: flex; align-items: center; gap: 10px; margin-top: 10px; font-size: 12.5px; color: var(--muted); min-height: 20px; }
+  .resumo-fila b { color: var(--soft); }
+  .resumo-fila .btn.link { margin-left: auto; }
   .gravacao .tag { font-size: 11px; font-weight: 800; color: var(--live); letter-spacing: .04em; }
   .vazio-lista { padding: 22px 16px; text-align: center; color: var(--muted); font-size: 13px; border: 1px dashed var(--line-2); border-radius: 12px; }
 
@@ -295,6 +328,26 @@
   details.mais summary:hover { color: #ffab88; }
   details.mais .dentro { margin-top: 12px; }
   details.mais ol { margin: 10px 0 0; padding-left: 20px; color: var(--soft); font-size: 13px; line-height: 1.75; }
+
+  /* só gravar: esconde o que é de transmissão (destino, atraso, qualidade e o botão Iniciar de baixo) */
+  #form.modo-gravar > .etapa:not(.so-gravar), #form.modo-gravar > .acoes { display: none !important; }
+  .grav-numeros { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; margin-top: 12px; border-radius: 13px; overflow: hidden;
+                  background: var(--line); border: 1px solid var(--line); }
+  .grav-numeros div { background: var(--bg-2); padding: 10px 6px; text-align: center; }
+  .grav-numeros b { display: block; font-size: 15px; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--soft); }
+  .grav-numeros span { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; font-weight: 700; }
+  .grav-acoes { display: grid; grid-template-columns: 1fr auto; gap: 10px; margin-top: 14px; }
+  #grav-iniciar { height: 48px; border: 0; border-radius: 12px; background: linear-gradient(135deg, #ff5a5f, #e02424); color: #fff;
+                  font-weight: 800; font-size: 15px; box-shadow: 0 10px 26px -12px rgba(224, 36, 36, .7); }
+  #grav-iniciar:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; }
+  #grav-parar { height: 48px; padding: 0 22px; border-radius: 12px; background: transparent; color: var(--live);
+                border: 1px solid rgba(255, 77, 79, .4); font-weight: 700; }
+  #grav-parar:disabled { opacity: .35; cursor: not-allowed; }
+  #grav-dot.gravando { background: var(--live); box-shadow: 0 0 8px var(--live); animation: pulsar 1.2s infinite; }
+  /* indicação de "gravando" no cartão do lado */
+  .rec { display: none; font-style: normal; font-size: 10.5px; font-weight: 800; letter-spacing: .05em; color: #fff; background: #e02424;
+         padding: 2px 7px; border-radius: 6px; }
+  .rec.ver { display: inline-block; animation: pulsar 1.6s infinite; }
 
   /* alerta e barra de ações */
   .alerta { display: none; padding: 12px 14px; border-radius: 12px; background: var(--err-soft); border: 1px solid rgba(255, 107, 107, .35);
@@ -358,6 +411,7 @@
                  background: var(--card-2); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .cont-status.normal { background: var(--orange-soft); color: var(--orange-text); }
   .cont-status.urgente { background: #e02424; color: #fff; }
+  .cont-status.ligado { background: var(--ok-soft); color: var(--ok); }
   .cont-linha { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
   .cont-linha + .cont-linha { margin-top: 8px; }
   .cont-linha .btn { height: 34px; padding: 0 11px; font-size: 12.5px; }
@@ -431,8 +485,12 @@
 <header>
   <div class="topo">
     <div class="marca">
-      <div class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="5" width="13" height="14" rx="3"/><path d="m15.5 10 6-3.5v11l-6-3.5"/></svg></div>
-      <h1>Espelho de Live</h1>
+      <div class="logo" aria-hidden="true"><svg viewBox="0 0 34 34">
+        <defs><linearGradient id="bm-vidro" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3a3c43"/><stop offset=".5" stop-color="#0a0b0d"/><stop offset="1" stop-color="#1c1d21"/></linearGradient></defs>
+        <rect x="1" y="1" width="32" height="32" rx="9" fill="url(#bm-vidro)" stroke="rgba(255,255,255,.22)"/>
+        <path d="M20 6 L17.5 13 L22 16 L16 21 L18.5 28 M17.5 13 L11 11 M22 16 L28 18 M16 21 L9 24" fill="none" stroke="rgba(255,255,255,.75)" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M3 3 L14 3 L3 12 Z" fill="rgba(255,255,255,.08)"/></svg></div>
+      <div><h1>BLACK MIRROR</h1><span class="sub-marca">painel de lives</span></div>
     </div>
     <div class="chips">
       <div id="pill-ts" class="pill"><span class="dot"></span><span class="lado-nome">TikTok → Shopee</span><span id="pill-ts-texto">Conectando...</span></div>
@@ -453,12 +511,12 @@
   <nav class="modos" role="tablist" aria-label="Sentido do espelhamento">
     <button type="button" class="modo ativa" data-modo="ts" role="tab">
       <span class="modo-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12a4 4 0 1 0 4 4V4a5 5 0 0 0 5 5"/></svg></span>
-      <span><span class="modo-nome">TikTok <i>→</i> Shopee</span><span class="modo-desc">Espelhar a live do TikTok ou reprisar gravações</span></span>
+      <span><span class="modo-nome">TikTok <i>→</i> Shopee <span class="rec" id="rec-ts" title="Gravando a live do TikTok (só gravar)">⏺ REC</span></span><span class="modo-desc">Espelhar a live do TikTok ou reprisar gravações</span></span>
       <span class="modo-status" id="status-ts"><span class="dot"></span><span class="t">Parado</span></span>
     </button>
     <button type="button" class="modo" data-modo="st" role="tab">
       <span class="modo-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg></span>
-      <span><span class="modo-nome">Shopee <i>→</i> TikTok</span><span class="modo-desc">Levar a live da Shopee para o TikTok Shop</span></span>
+      <span><span class="modo-nome">Shopee <i>→</i> TikTok <span class="rec" id="rec-st" title="Gravando a live da Shopee (só gravar)">⏺ REC</span></span><span class="modo-desc">Levar a live da Shopee para o TikTok Shop</span></span>
       <span class="modo-status" id="status-st"><span class="dot"></span><span class="t">Parado</span></span>
     </button>
   </nav>
@@ -469,24 +527,56 @@
     <span class="txt">Encerrar a live onde aparecer um aviso de restrição<small>Se a Shopee mostrar que a live ou a conta foi restringida, suspensa ou interrompida por violação, encerro na hora só a live da Shopee. Se for no TikTok, encerro só a live do TikTok. A outra continua no ar. Precisa da extensão 1.7 ou mais nova.</small></span>
   </label>
 
+
   <div class="grade">
     <form id="form" autocomplete="off">
       <div class="abas" id="sub-abas" role="tablist">
         <button type="button" class="aba ativa" data-aba="espelho" role="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.48M7.76 16.24a6 6 0 0 1 0-8.48M19.07 4.93a10 10 0 0 1 0 14.14M4.93 19.07a10 10 0 0 1 0-14.14"/></svg>Espelhar ao vivo</button>
         <button type="button" class="aba" data-aba="reprise" role="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>Reprisar gravação</button>
+        <button type="button" class="aba" data-aba="gravar_ts" role="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5" fill="currentColor"/></svg>Só gravar</button>
       </div>
       <div class="abas" id="sub-abas-st" role="tablist" hidden>
         <button type="button" class="aba" data-aba="tiktok" role="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.48M7.76 16.24a6 6 0 0 1 0-8.48M19.07 4.93a10 10 0 0 1 0 14.14M4.93 19.07a10 10 0 0 1 0-14.14"/></svg>Espelhar ao vivo</button>
         <button type="button" class="aba" data-aba="reprise_tt" role="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>Reprisar gravação</button>
+        <button type="button" class="aba" data-aba="gravar_st" role="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5" fill="currentColor"/></svg>Só gravar</button>
       </div>
+
+      <!-- SÓ GRAVAR (sem transmitir), nos dois sentidos -->
+      <section class="etapa so-gravar" id="secao-gravar" hidden>
+        <div class="etapa-topo"><span class="etapa-num">⏺</span><h2>Só gravar <span class="sub-tit" id="gravar-sub">· live do TikTok</span></h2>
+          <span class="extra"><button type="button" class="btn link" id="grav-abrir-pasta">Abrir pasta</button></span></div>
+        <p class="dica" id="gravar-dica" style="margin: -6px 0 12px"></p>
+        <div class="bloco" id="gravar-bloco-ts">
+          <label class="rot" for="gravar-usuario">@ do perfil do TikTok que vai fazer a live</label>
+          <div class="campo"><div class="prefixo"><span>@</span><input id="gravar-usuario" placeholder="seuperfil" spellcheck="false"></div></div>
+          <p class="dica">Usa o sessionid salvo em "Espelhar ao vivo", se houver (lives com restrição de idade).</p>
+        </div>
+        <div class="bloco" id="gravar-bloco-st" hidden>
+          <label class="rot" for="gravar-link">Link da live na Shopee</label>
+          <div class="campo"><input id="gravar-link" placeholder="https://br.shp.ee/..." spellcheck="false"><button type="button" data-colar="gravar-link">Colar</button></div>
+          <p class="dica">Na live: <b>Compartilhar → Copiar link</b>. Cada live tem um link próprio.</p>
+        </div>
+        <div class="status" style="margin-top: 14px"><span id="grav-dot" class="js-dot"></span><span id="grav-texto">Parado.</span></div>
+        <div class="grav-numeros">
+          <div><b id="grav-tempo">--:--</b><span>gravando</span></div>
+          <div><b id="grav-mb">—</b><span>tamanho</span></div>
+          <div><b id="grav-partes">—</b><span>partes</span></div>
+        </div>
+        <div class="grav-acoes">
+          <button type="button" id="grav-iniciar">⏺ Começar a gravar</button>
+          <button type="button" id="grav-parar" disabled>■ Parar gravação</button>
+        </div>
+        <p class="dica">Pode gravar enquanto este lado transmite outra coisa (uma reprise, por exemplo). A gravação para sozinha quando a live acabar.</p>
+      </section>
 
       <!-- 1. GRAVAÇÃO (reprise, nos dois sentidos) -->
       <section class="etapa so-reprise" id="secao-reprise" hidden>
         <div class="etapa-topo"><span class="etapa-num">1</span><h2>Gravação</h2>
           <span class="extra"><button type="button" class="btn link" id="atualizar-gravacoes">Atualizar</button><button type="button" class="btn link" id="abrir-pasta">Abrir pasta</button></span></div>
         <p class="dica" id="dica-reprise" style="margin: -6px 0 12px">Escolha um vídeo da pasta de gravações.</p>
-        <div id="lista-gravacoes" class="lista-gravacoes" role="radiogroup" aria-label="Gravações"></div>
-        <div class="bloco"><label class="opcao"><input type="checkbox" id="repetir"><span class="txt">Repetir em <b>loop</b><small>Quando o vídeo acaba, ele recomeça emendado, sem parar a transmissão.</small></span></label></div>
+        <div id="lista-gravacoes" class="lista-gravacoes" role="group" aria-label="Gravações"></div>
+        <div class="resumo-fila" id="resumo-fila"></div>
+        <div class="bloco"><label class="opcao"><input type="checkbox" id="repetir"><span class="txt">Repetir em <b>loop</b><small>Quando o vídeo (ou o último da fila) acaba, recomeça do primeiro, emendado, sem parar a transmissão.</small></span></label></div>
         <div class="bloco" id="bloco-tempo">
           <label class="rot" for="horas">Por quanto tempo fica em loop</label>
           <select id="horas">
@@ -700,6 +790,27 @@
         </div>
         <p class="dica" id="cont-dica">Mostra "Oferta termina em" no vídeo, à esquerda, abaixo do cartão do produto. Fica vermelho no último minuto e some ao zerar.</p>
       </div>
+
+      <!-- card "SIGA O PERFIL": liga e desliga, igual ao contador -->
+      <div class="contador-card" id="card-card">
+        <div class="contador-topo"><b>📣 Card "SIGA O PERFIL"</b><span class="onde" id="card-onde">na live da Shopee</span>
+          <span class="cont-status" id="card-status">Desligado</span></div>
+        <div class="cont-linha">
+          <button type="button" class="btn" id="card-ligar" style="flex: 1">📣 Mostrar card</button>
+          <button type="button" class="btn perigo" id="card-desligar" style="height: 34px">■ Tirar</button>
+        </div>
+        <p class="dica" id="card-dica">Aparece no vídeo, à esquerda, logo abaixo do contador, até você tirar.</p>
+      </div>
+
+      <!-- banner "SIGA O PERFIL" ao lado do + Seguir (só Shopee): um botão liga, o mesmo botão tira -->
+      <div class="contador-card" id="banner-card">
+        <div class="contador-topo"><b>📌 Banner "SIGA O PERFIL"</b><span class="onde">na live da Shopee</span>
+          <span class="cont-status" id="banner-status">Desligado</span></div>
+        <div class="cont-linha">
+          <button type="button" class="btn" id="banner-botao" style="flex: 1">📌 Mostrar banner</button>
+        </div>
+        <p class="dica" id="banner-dica">Fica ao lado do botão + Seguir da Shopee. Aperte para pôr, aperte de novo para tirar. Muda na hora, sem parar a live.</p>
+      </div>
     </aside>
   </div>
 
@@ -724,7 +835,9 @@ const ROTULOS = {
   reconectando: "Reconectando", offline: "Painel desligado", reprise: "REPRISE"
 };
 let ultimoLog = 0, preenchido = false, fotoTimer = null, fotoLado = null, ultimo = null;
-let aba = "espelho", arquivoSel = null, rodandoAgora = false, ajudaAberta = false, alarmeLado = null;
+let aba = "espelho", rodandoAgora = false, ajudaAberta = false, alarmeLado = null;
+let fila = [];            // vídeos escolhidos para a reprise, na ordem em que vão passar
+let duracoes = {};        // nome do vídeo -> duração (s), para somar o tempo da fila
 const NO_AR = (e) => e === "ao_vivo" || e === "reprise";
 const NOME_LADO = { ts: "TikTok → Shopee", st: "Shopee → TikTok" };
 const estadoAnt = { ts: "", st: "" };
@@ -774,8 +887,11 @@ const TEXTOS_ABA = {
   reprise_tt: { botao: "▶ Iniciar reprise no TikTok", atraso: "Atraso antes de ir para o TikTok",
              mutar: 'Mutar <b>"shopee"</b>, <b>"shop"</b>, <b>"pix"</b> e <b>"bom dia"</b>, <b>"boa tarde"</b>, <b>"boa noite"</b>',
              dica: "Ouvida no vídeo e silenciada durante o atraso, antes de chegar no TikTok." },
+  gravar_ts: { botao: "", atraso: "", mutar: "", dica: "" },
+  gravar_st: { botao: "", atraso: "", mutar: "", dica: "" },
 };
-const MODO_DA_ABA = { espelho: "ts", reprise: "ts", tiktok: "st", reprise_tt: "st" };
+const MODO_DA_ABA = { espelho: "ts", reprise: "ts", tiktok: "st", reprise_tt: "st", gravar_ts: "ts", gravar_st: "st" };
+const GRAVAR_DA_ABA = { gravar_ts: "ts", gravar_st: "st" };
 const PASTA_DA_ABA = { reprise: "ts", reprise_tt: "st" };
 const NOME_PASTA = { ts: "TikTok para Shopee", st: "Shopee para TikTok" };
 
@@ -791,6 +907,7 @@ function mudarAba(nova) {
     $("monitor-lado").textContent = NOME_LADO[modo];
     rodandoAgora = null;               // força reavaliar o travamento dos campos
   }
+  document.body.classList.toggle("lado-st", modo === "st");     // rosa no Shopee -> TikTok, laranja no outro
   document.querySelectorAll(".modo").forEach(b => {
     b.classList.toggle("ativa", b.dataset.modo === modo);
     b.setAttribute("aria-selected", b.dataset.modo === modo);
@@ -804,10 +921,23 @@ function mudarAba(nova) {
   document.querySelectorAll(".so-tiktok").forEach(el => el.hidden = nova !== "tiktok");
   document.querySelectorAll(".so-obs").forEach(el => el.hidden = modo !== "st");
   document.querySelectorAll(".so-rtmp").forEach(el => el.hidden = modo !== "ts");
+  const gravar = GRAVAR_DA_ABA[nova];
+  $("secao-gravar").hidden = !gravar;
+  $("form").classList.toggle("modo-gravar", !!gravar);
+  if (gravar) {
+    $("gravar-bloco-ts").hidden = gravar !== "ts";
+    $("gravar-bloco-st").hidden = gravar !== "st";
+    $("gravar-sub").textContent = gravar === "ts" ? "· live do TikTok" : "· live da Shopee";
+    $("gravar-dica").innerHTML = gravar === "ts"
+      ? 'Grava a live do TikTok <b>sem transmitir</b> para lugar nenhum. O vídeo vai para a pasta <b>gravacoes\\TikTok para Shopee</b>, pronto para reprisar na Shopee.'
+      : 'Grava a live da Shopee <b>sem transmitir</b> para lugar nenhum. O vídeo vai para a pasta <b>gravacoes\\Shopee para TikTok</b>, pronto para reprisar no TikTok.';
+    if (ultimo) renderGravacao(ultimo);
+  }
   if (PASTA_DA_ABA[nova]) {
-    $("dica-reprise").innerHTML = `Vídeos da pasta <b>gravacoes\\${NOME_PASTA[PASTA_DA_ABA[nova]]}</b>: ` +
-      "lives salvas pelo painel ou vídeos seus que você colocou lá.";
-    if (trocouPasta) arquivoSel = null;
+    $("dica-reprise").innerHTML = `Vídeos da pasta <b>gravacoes\\${NOME_PASTA[PASTA_DA_ABA[nova]]}</b>. ` +
+      "Clique nos vídeos <b>na ordem</b> em que devem passar: com mais de um, eles passam em sequência, " +
+      "emendados, sem parar a live. Os de <b style=\"color: var(--ok)\">1 hora ou mais</b> ficam com o tempo em verde.";
+    if (trocouPasta) fila = [];
   }
   const t = TEXTOS_ABA[nova];
   $("iniciar").textContent = t.botao;
@@ -833,19 +963,23 @@ async function carregarGravacoes() {
     const r = await (await fetch("/api/gravacoes?pasta=" + pasta, { cache: "no-store" })).json();
     if ((PASTA_DA_ABA[aba] || "ts") !== pasta) return;     // trocou de aba enquanto carregava
     box.innerHTML = "";
+    duracoes = {};
     if (!r.itens.length) {
       box.innerHTML = `<div class="vazio-lista">Nenhum vídeo na pasta <b>${NOME_PASTA[pasta]}</b> ainda.<br>` +
-        'Ligue "Salvar a live neste computador" em Espelhar ao vivo, ou coloque um vídeo seu na pasta.</div>';
-      arquivoSel = null;
+        'Ligue "Salvar a live neste computador" em Espelhar ao vivo, use "Só gravar", ou coloque um vídeo seu na pasta.</div>';
+      fila = [];
+      mostrarFila();
       return;
     }
-    if (!r.itens.some(i => i.nome === arquivoSel)) arquivoSel = null;
+    // tira da fila o que não está mais na pasta (ou está sendo gravado)
+    fila = fila.filter(n => r.itens.some(i => i.nome === n && !i.gravando));
     for (const g of r.itens) {
+      duracoes[g.nome] = g.duracao || 0;
       const b = document.createElement("button");
-      b.type = "button"; b.className = "gravacao" + (g.nome === arquivoSel ? " sel" : "");
-      b.setAttribute("role", "radio"); b.setAttribute("aria-checked", g.nome === arquivoSel);
+      b.type = "button"; b.className = "gravacao";
+      b.dataset.nome = g.nome;
       b.disabled = g.gravando || !!rodandoAgora;
-      const radio = document.createElement("span"); radio.className = "radio";
+      const ordem = document.createElement("span"); ordem.className = "ordem";
       const meio = document.createElement("div");
       const nome = document.createElement("div"); nome.className = "nome"; nome.textContent = g.nome;
       const info = document.createElement("div"); info.className = "info";
@@ -853,18 +987,46 @@ async function carregarGravacoes() {
       meio.append(nome, info);
       const dir = document.createElement("span");
       if (g.gravando) { dir.className = "tag"; dir.textContent = "● GRAVANDO"; }
-      else { dir.className = "dur"; dir.textContent = fmtDur(g.duracao); }
-      b.append(radio, meio, dir);
+      else {
+        dir.className = "dur" + ((g.duracao || 0) >= 3600 ? " longa" : "");
+        dir.textContent = fmtDur(g.duracao);
+        if ((g.duracao || 0) >= 3600) dir.title = "1 hora ou mais";
+      }
+      b.append(ordem, meio, dir);
       b.addEventListener("click", () => {
-        arquivoSel = g.nome;
-        box.querySelectorAll(".gravacao").forEach(x => { x.classList.remove("sel"); x.setAttribute("aria-checked", "false"); });
-        b.classList.add("sel"); b.setAttribute("aria-checked", "true");
+        // clique: entra no fim da fila; clicar de novo tira da fila
+        const i = fila.indexOf(g.nome);
+        if (i >= 0) fila.splice(i, 1); else fila.push(g.nome);
+        mostrarFila();
       });
       box.append(b);
     }
+    mostrarFila();
   } catch {
     box.innerHTML = '<div class="vazio-lista">Não consegui ler a pasta de gravações.</div>';
   }
+}
+
+// números da fila nos vídeos e o resumo embaixo da lista
+function mostrarFila() {
+  $("lista-gravacoes").querySelectorAll(".gravacao").forEach(b => {
+    const i = fila.indexOf(b.dataset.nome);
+    b.classList.toggle("sel", i >= 0);
+    b.setAttribute("aria-pressed", i >= 0);
+    b.querySelector(".ordem").textContent = i >= 0 ? String(i + 1) : "";
+  });
+  const caixa = $("resumo-fila");
+  caixa.innerHTML = "";
+  if (!fila.length) { caixa.textContent = "Nenhum vídeo escolhido."; return; }
+  const total = fila.reduce((s, n) => s + (duracoes[n] || 0), 0);
+  const txt = document.createElement("span");
+  txt.innerHTML = fila.length === 1 ? `<b>1 vídeo</b> escolhido · ${fmtDur(total)}`
+    : `<b>Fila de ${fila.length} vídeos</b> · ${fmtDur(total)} no total · passam na ordem dos números`;
+  const limpar = document.createElement("button");
+  limpar.type = "button"; limpar.className = "btn link"; limpar.textContent = "Limpar";
+  limpar.disabled = !!rodandoAgora;
+  limpar.addEventListener("click", () => { fila = []; mostrarFila(); });
+  caixa.append(txt, limpar);
 }
 
 function fmtTempo(s) {
@@ -880,13 +1042,16 @@ function pegaStat(texto, nome) {
 }
 
 // trava os campos do lado que está na tela, se ESSE lado estiver transmitindo (o outro lado fica livre)
-function travar(rodando) {
+function travar(rodando, tipo) {
   if (rodando === rodandoAgora) return;
   rodandoAgora = rodando;
   for (const id of ["usuario", "sessionid", "lembrar-sid", "gravar", "repetir", "horas", "encerrar-fim", "encerrar-shopee", "url", "chave", "atraso",
                     "atraso-menos", "atraso-mais", "mutar", "qualidade", "modo", "fps", "intervalo", "pegar-chave",
                     "shopee-link", "gravar-tt", "auto-tiktok"]) $(id).disabled = rodando;
-  document.querySelectorAll("[data-colar], .aba").forEach(b => b.disabled = rodando);
+  document.querySelectorAll("[data-colar]:not([data-colar=gravar-link])").forEach(b => b.disabled = rodando);
+  // "Só gravar" é independente da transmissão: continua liberado (e a aba do que está rodando também)
+  document.querySelectorAll(".aba").forEach(b => b.disabled = rodando && !GRAVAR_DA_ABA[b.dataset.aba] && b.dataset.aba !== tipo);
+  mostrarFila();
   document.querySelectorAll(".gravacao").forEach(b => b.disabled = rodando || b.querySelector(".tag") !== null);
   $("iniciar").disabled = rodando;
   $("parar").disabled = !rodando;
@@ -959,6 +1124,8 @@ function render(s) {
     $("sincronia-voz").value = s.config.sincronia_auto !== false ? "auto" : String(s.config.ajuste_voz_ms ?? 100);
     $("shopee-link").value = s.config.shopee_link || "";
     $("encerrar-shopee").checked = !!s.config.encerrar_shopee;
+    $("gravar-usuario").value = s.config.gravar_tiktok_usuario || "";
+    $("gravar-link").value = s.config.gravar_shopee_link || "";
     mostrarSidSalvo(s.config.sessionid_salvo);
     let salva = "espelho";
     try { salva = localStorage.getItem("aba") || "espelho"; } catch {}
@@ -987,7 +1154,12 @@ function render(s) {
       estadoAnt[lado] = L.estado;
     }
   }
-  document.title = (algumVivo ? "🔴 " : algumNoAr ? "🔁 " : "") + "Espelho de Live";
+  document.title = (algumVivo ? "🔴 " : algumNoAr ? "🔁 " : "") + "Black Mirror";
+  for (const lado of ["ts", "st"]) {
+    const G = (s.gravacoes || {})[lado] || {};
+    $("rec-" + lado).classList.toggle("ver", G.estado === "gravando");
+  }
+  renderGravacao(s);
   renderLado(s);
   escreverLogs(s.logs);
   if (s.shopee) {
@@ -1042,6 +1214,25 @@ function render(s) {
   if (tocar) bipe();
 }
 
+// "Só gravar" do lado que está na tela
+const ROTULO_GRAV = { parado: "Parado.", aguardando: "Esperando a live começar...", gravando: "Gravando",
+                      reconectando: "Reconectando..." };
+function renderGravacao(s) {
+  const lado = GRAVAR_DA_ABA[aba];
+  if (!lado) return;
+  const G = (s.gravacoes || {})[lado] || { rodando: false, estado: "parado" };
+  $("grav-dot").className = "js-dot " + (G.estado === "gravando" ? "gravando" : G.rodando ? "aberto" : "");
+  let texto = G.mensagem && G.rodando ? G.mensagem : (G.rodando ? ROTULO_GRAV[G.estado] : "Parado.");
+  if (!G.rodando && G.mensagem) texto = G.mensagem;     // como terminou a última gravação
+  $("grav-texto").textContent = texto;
+  $("grav-tempo").textContent = G.rodando ? fmtTempo(G.gravando_seg) : "--:--";
+  $("grav-mb").textContent = G.rodando && G.mb != null ? (G.mb >= 1000 ? (G.mb / 1000).toFixed(2) + " GB" : G.mb + " MB") : "—";
+  $("grav-partes").textContent = G.rodando && G.partes ? G.partes : "—";
+  $("grav-iniciar").disabled = !!G.rodando;
+  $("grav-parar").disabled = !G.rodando;
+  $("gravar-usuario").disabled = $("gravar-link").disabled = !!G.rodando;
+}
+
 function rotuloLado(L, lado) {
   if (L.estado === "aguardando") return lado === "st" ? "Aguardando a Shopee" : "Aguardando o TikTok";
   if (L.estado === "reconectando" && L.pausa) return "Pausada na Shopee";
@@ -1064,7 +1255,7 @@ function renderLado(s) {
   $("tela-tempo").textContent = fmtTempo(L.ao_vivo_seg);
   $("n-bitrate").textContent = NO_AR(est) ? ((L.stats || "").split("·")[1] || "—").trim() : "—";
   $("n-velocidade").textContent = NO_AR(est) ? pegaStat(L.stats, "velocidade") : "—";
-  travar(L.rodando);
+  travar(L.rodando, L.tipo_ativo);
   $("n-atraso").textContent = L.rodando && L.atraso_ativo != null ? L.atraso_ativo + " s" : "—";
   $("n-mudos").textContent = L.rodando ? (L.mudo_ativo ? L.mudos : "desligado") : "—";
   const gravando = L.rodando && ((L.tipo_ativo === "espelho" && s.config.gravar) || (L.tipo_ativo === "tiktok" && s.config.gravar_st));
@@ -1143,16 +1334,17 @@ $("form").addEventListener("submit", async (e) => {
                         gravar: $("gravar-tt").checked, auto_tiktok: $("auto-tiktok").checked,
                         ajuste_voz: $("sincronia-voz").value });
   }
+  if (GRAVAR_DA_ABA[aba]) return;          // "Só gravar" tem os próprios botões
   if (aba === "reprise_tt") {
-    if (!arquivoSel) { alerta("Escolha um vídeo da lista de gravações."); return; }
-    return iniciarCom({ tipo: "reprise", sentido: "st", arquivo: arquivoSel, repetir: $("repetir").checked,
+    if (!fila.length) { alerta("Escolha um vídeo da lista de gravações (ou vários, para uma fila)."); return; }
+    return iniciarCom({ tipo: "reprise", sentido: "st", arquivo: fila[0], arquivos: fila, repetir: $("repetir").checked,
                         horas: $("horas").value, encerrar_fim: $("encerrar-fim").checked,
                         atraso: $("atraso").value, mutar_palavras: $("mutar").checked,
                         ajuste_voz: $("sincronia-voz").value });
   }
   const url = $("url").value.trim(), chave = $("chave").value.trim();
   const reprise = aba === "reprise";
-  if (reprise && !arquivoSel) { alerta("Escolha um vídeo da lista de gravações."); return; }
+  if (reprise && !fila.length) { alerta("Escolha um vídeo da lista de gravações (ou vários, para uma fila)."); return; }
   if (!reprise && !$("usuario").value.trim()) { alerta("Informe o @ do perfil do TikTok."); $("usuario").focus(); return; }
   if (!/^rtmps?:\/\//i.test(url)) { alerta("Cole a URL do servidor da Shopee (começa com rtmp://)."); $("url").focus(); return; }
   if (!chave && url.replace(/\/+$/, "").split("/").length < 5 &&
@@ -1162,7 +1354,7 @@ $("form").addEventListener("submit", async (e) => {
     lembrar_sessionid: $("lembrar-sid").checked, url, chave, qualidade: $("qualidade").value,
     modo: $("modo").value, fps: $("fps").value, intervalo: $("intervalo").value,
     atraso: $("atraso").value, mutar_palavras: $("mutar").checked,
-    tipo: reprise ? "reprise" : "espelho", arquivo: arquivoSel, repetir: $("repetir").checked,
+    tipo: reprise ? "reprise" : "espelho", arquivo: fila[0] || null, arquivos: fila, repetir: $("repetir").checked,
     horas: $("horas").value, encerrar_fim: $("encerrar-fim").checked,
     gravar: $("gravar").checked, encerrar_shopee: $("encerrar-shopee").checked
   });
@@ -1281,6 +1473,38 @@ $("abrir-pasta").addEventListener("click", async () => {
   try { await enviar("/api/abrir_pasta", { pasta: PASTA_DA_ABA[aba] || "ts" }); } catch { alerta("Não consegui abrir a pasta."); }
 });
 
+// ---------------- só gravar (sem transmitir)
+$("grav-abrir-pasta").addEventListener("click", async () => {
+  try { await enviar("/api/abrir_pasta", { pasta: GRAVAR_DA_ABA[aba] || "ts" }); } catch { alerta("Não consegui abrir a pasta."); }
+});
+$("grav-iniciar").addEventListener("click", async () => {
+  alerta("");
+  const lado = GRAVAR_DA_ABA[aba];
+  if (!lado) return;
+  const dados = { sentido: lado, acao: "iniciar" };
+  if (lado === "ts") {
+    dados.usuario = $("gravar-usuario").value.trim();
+    if (!dados.usuario) { alerta("Informe o @ do perfil do TikTok que você quer gravar."); $("gravar-usuario").focus(); return; }
+    dados.sessionid = $("sessionid").value;
+  } else {
+    dados.shopee_link = $("gravar-link").value.trim();
+    if (!dados.shopee_link) { alerta("Cole o link da live da Shopee."); $("gravar-link").focus(); return; }
+  }
+  $("grav-iniciar").disabled = true;
+  try {
+    const r = await enviar("/api/gravar", dados);
+    if (!r.ok) { alerta(r.erro); $("grav-iniciar").disabled = false; }
+    else atualizar();
+  } catch { alerta("Não consegui falar com o painel. Ele está aberto?"); $("grav-iniciar").disabled = false; }
+});
+$("grav-parar").addEventListener("click", async () => {
+  const lado = GRAVAR_DA_ABA[aba];
+  if (!lado) return;
+  $("grav-parar").disabled = true;
+  try { await enviar("/api/gravar", { sentido: lado, acao: "parar" }); } catch {}
+  atualizar();
+});
+
 atualizar();
 // ---------------- contador "Oferta termina em" (vale para o lado que está aberto)
 const ONDE_CONTADOR = { ts: "na live da Shopee", st: "na live do TikTok" };
@@ -1300,7 +1524,42 @@ function mostrarContador(c, lados) {
       : "Mostra \"Oferta termina em\" no vídeo do TikTok (pelo OBS)")
     + ", à esquerda, abaixo do cartão do produto. Fica vermelho no último minuto e some ao zerar."
     + (lados && !rodando ? " Este lado não está transmitindo agora: o contador aparece quando ele estiver no ar." : "");
+  // card "SIGA O PERFIL"
+  $("card-onde").textContent = ONDE_CONTADOR[lado];
+  $("card-status").className = "cont-status " + (e.card ? "ligado" : "");
+  $("card-status").textContent = e.card ? "Na tela" : "Desligado";
+  $("card-dica").textContent = (lado === "ts" ? "Aparece no vídeo que vai para a Shopee" : "Aparece no vídeo do TikTok (pelo OBS)")
+    + ", à esquerda, logo abaixo do contador, até você tirar."
+    + (lados && !rodando ? " Este lado não está transmitindo agora: o card aparece quando ele estiver no ar." : "");
+  mostrarBanner();
 }
+async function pedirCard(ligar) {
+  try {
+    const r = await enviar("/api/contador", { lado: ladoContador(), acao: ligar ? "card_ligar" : "card_desligar" });
+    if (!r.ok) alerta(r.erro); else { alerta(""); mostrarContador(r.contador); }
+  } catch { alerta("Não consegui falar com o painel. Ele está aberto?"); }
+}
+// banner: o mesmo botão põe e tira (só existe na Shopee)
+function mostrarBanner() {
+  const ligado = !!((ultimoContador || {}).ts || {}).banner;
+  $("banner-card").hidden = ladoContador() !== "ts";
+  $("banner-status").className = "cont-status " + (ligado ? "ligado" : "");
+  $("banner-status").textContent = ligado ? "Na tela" : "Desligado";
+  $("banner-botao").textContent = ligado ? "■ Tirar banner" : "📌 Mostrar banner";
+  $("banner-botao").classList.toggle("perigo", ligado);
+  $("banner-botao").style.height = ligado ? "34px" : "";
+}
+$("banner-botao").addEventListener("click", async () => {
+  const ligado = !!((ultimoContador || {}).ts || {}).banner;
+  $("banner-botao").disabled = true;
+  try {
+    const r = await enviar("/api/contador", { lado: "ts", acao: ligado ? "banner_desligar" : "banner_ligar" });
+    if (!r.ok) alerta(r.erro); else { alerta(""); mostrarContador(r.contador); }
+  } catch { alerta("Não consegui falar com o painel. Ele está aberto?"); }
+  $("banner-botao").disabled = false;
+});
+$("card-ligar").addEventListener("click", () => pedirCard(true));
+$("card-desligar").addEventListener("click", () => pedirCard(false));
 function segundosContador() {
   const m = Math.round(Number($("cont-min").value) || 0), sg = Math.round(Number($("cont-seg").value) || 0);
   return m * 60 + sg;

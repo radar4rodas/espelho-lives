@@ -52,6 +52,12 @@ Como funciona: o reconhecimento de voz (Vosk, roda offline no seu computador, na
 para a internet) procura só pelo som de "tiktok" ("tique toque") e "tiktok shop". O áudio só
 fica mudo nesses trechos, com uma pequena folga antes e depois.
 
+**Mais preciso (desde 28/11):** o reconhecimento também conhece palavras comuns com som parecido ("tira",
+"toque", "local", "estoque"...). Antes ele só tinha "tiktok" e "nada" para escolher, e falas como "tira o bocal"
+viravam "tiktok", mutando a fala no meio. Num teste com 40 min de uma live gravada, isso mutava à toa umas 11 vezes;
+agora nenhuma, e os "TikTok" de verdade continuaram sendo mutados. No sentido Shopee → TikTok os mudos à toa caíram
+pela metade, sem perder nenhum "Shopee" a mais. Só vale depois de reabrir o painel.
+
 **Saudações:** "bom dia", "boa tarde" e "boa noite" também são mutadas, nas duas direções
 (TikTok → Shopee e Shopee → TikTok). Só conta quando as duas palavras vêm juntas: "muito bom,
 e o dia..." não é mutado.
@@ -86,6 +92,19 @@ Durante a live, o painel consulta o TikTok a cada segundo. Quando o TikTok confi
 envio é cortado e a extensão clica em **Finalizar Transmissão** e na confirmação. Nos testes,
 levou cerca de 3 segundos no total. **Pausas** no TikTok não finalizam a Shopee.
 
+**Live do TikTok engasgou ou pausou → a Shopee não cai:** se o vídeo do TikTok parar de chegar por mais de
+3 segundos, a Shopee passa a receber a imagem **"Já voltamos!"** (`imagens\ja_voltamos.png`, sem som). Enquanto
+isso, o painel busca a live do TikTok de novo a cada 3 a 15 segundos e, quando ela volta, emenda o vídeo **sem a
+Shopee cair**. O registro mostra "📺 ... Já voltamos!" e depois "✅ O vídeo do TikTok voltou depois de Ns". A imagem
+sai do ar sozinha se o TikTok confirmar que a live acabou, ou depois de 10 minutos sem a live voltar.
+Antes (25/11), sem vídeo, a Shopee fechava a conexão em ~1 minuto. Para desligar: `"tapa_pausa": false` no
+`config.json`.
+
+O painel pergunta ao TikTok a cada **3 segundos** se a live acabou. Antes perguntava várias vezes por segundo, e
+depois de ~50 minutos o TikTok bloqueava as consultas (erro HTTP 403), o que impedia de reconectar. Se vier 403,
+ele espera 10 a 30 segundos antes de perguntar de novo. Logo depois de uma queda, tenta reconectar a cada 5 s
+(antes eram 20 s).
+
 Se algo der errado (por exemplo, a Shopee mudou a página), o painel mostra um **alarme vermelho
 com som** para você finalizar manualmente. O botão **Finalizar agora na Shopee** serve para
 encerrar na hora ou para testar (use uma live do tipo **Teste**).
@@ -109,9 +128,15 @@ continua no mesmo vídeo. Ocupa cerca de 1 GB por hora. A gravação guarda o á
 **Reprisar:** em **TikTok → Shopee → Reprisar gravação**:
 1. Escolha o vídeo na lista (lives salvas pelo painel ou vídeos seus que você colocar na
    pasta, como o replay baixado do TikTok: `.mp4`, `.ts`, `.flv`, `.mov`, `.mkv`).
+   Os vídeos com **1 hora ou mais** ficam com o tempo em **verde**.
+   **Fila:** clique em vários vídeos, na ordem em que devem passar. Cada um ganha um número (1, 2, 3...) e eles
+   passam **em sequência, emendados, sem parar a live** (a conexão com a Shopee/OBS continua; cerca de 0,2 s de
+   imagem parada na troca). Clique de novo num vídeo para tirá-lo da fila, ou em **Limpar**. Um vídeo com defeito
+   na fila é pulado. Com "Repetir em loop", depois do último volta para o primeiro. Se a conexão cair, continua
+   no mesmo vídeo da fila, de onde parou.
 2. Ligue **"Repetir em loop"** para ficar repetindo, ou deixe desligado para passar uma vez só.
    No loop, quando o vídeo acaba ele **recomeça emendado, sem parar a transmissão** (a conexão
-   com a Shopee/OBS continua; no máximo ~1 s de imagem parada na emenda, o som segue).
+   com a Shopee/OBS continua; cerca de 0,2 s de imagem parada na emenda).
 3. Em **"Por quanto tempo fica em loop"**, escolha de **1 a 10 horas** (ou "Até eu clicar em
    Parar"). Quando o tempo acaba, a reprise para sozinha. Com **"Quando o tempo acabar, encerrar
    a live"** ligado, o painel também encerra a live na Shopee/TikTok pela extensão; desligado,
@@ -119,6 +144,16 @@ continua no mesmo vídeo. Ocupa cerca de 1 GB por hora. A gravação guarda o á
 4. Confira a URL e a chave da Shopee, e clique em **▶ Iniciar reprise**.
 
 O mesmo vale em **Shopee → TikTok → Reprisar gravação** (loop emendado e tempo de loop).
+
+**Só gravar (sem transmitir):** cada lado tem a aba **Só gravar**, para montar um acervo das suas lives:
+- **TikTok → Shopee → Só gravar:** escreva o @ do TikTok e clique em **⏺ Começar a gravar**. A live do TikTok é
+  gravada na pasta `gravacoes\TikTok para Shopee`, pronta para reprisar na Shopee.
+- **Shopee → TikTok → Só gravar:** cole o link da live da Shopee. Ela é gravada em `gravacoes\Shopee para TikTok`,
+  pronta para reprisar no TikTok.
+- Pode começar antes da live: o painel espera ela entrar no ar. Para sozinho quando a plataforma confirma que a live
+  acabou (ou em **■ Parar gravação**). Se a conexão cair, grava a continuação em partes e emenda tudo no fim.
+- O vídeo é copiado como chega (não recodifica), então quase não pesa no computador. Funciona até com o lado
+  transmitindo outra coisa (uma reprise, por exemplo). O cartão do lado mostra **⏺ REC** enquanto grava.
 
 O atraso, o mudo automático e a qualidade valem também para a reprise. Use **Abrir pasta**
 para ver os arquivos e **Atualizar lista** depois de colocar um vídeo novo lá.
@@ -269,6 +304,36 @@ plataforma mostra. Fica **vermelho no último minuto** e **some da tela quando z
 **Para ativar depois de atualizar:** feche e abra o painel. Para o TikTok, **feche também o OBS** antes de
 clicar em Iniciar: o painel reabre o OBS com a cena nova (com a camada "Contador"). Se o OBS abrir com a cena
 antiga, o registro avisa.
+
+## Card "SIGA O PERFIL" (liga e desliga, igual ao contador)
+
+Um card branco com **"SIGA O PERFIL — e não perca nenhuma oferta!"** que você coloca no vídeo por um tempo e tira
+quando quiser. Fica à esquerda, logo abaixo do contador.
+
+- **Ligar:** no painel do PC, quadro **📣 Card "SIGA O PERFIL"** (embaixo do contador): **📣 Mostrar card** e
+  **■ Tirar**. No celular, cada cartão (TikTok e Shopee) tem os mesmos botões, embaixo do contador.
+- Aparece na live que passa pelo computador: TikTok → Shopee (na Shopee, desenhado no vídeo) e Shopee → TikTok
+  (no TikTok, pela camada do OBS). Liga e desliga **sem parar a live**.
+- A imagem é `imagens\card_siga.png` (fundo transparente): para trocar o desenho, troque o arquivo.
+- Posição: `"card_siga_x"`, `"card_siga_y"` (canto de cima à esquerda, de 0 a 1; padrão 0.11 e 0.375) e
+  `"card_siga_larg"` (largura, padrão 0.42) no `config.json`.
+- Para aparecer no TikTok depois de atualizar, feche o OBS antes de iniciar (ou atualize a camada "Contador").
+
+## Banner "SIGA O PERFIL" na Shopee
+
+Um banner fixo **"SIGA O PERFIL"**, com uma seta apontando para o botão **+ Seguir** da Shopee, aparece no alto do
+vídeo, logo à direita do botão. Aparece na **live espelhada (TikTok → Shopee)** e na **reprise
+para a Shopee** (inclusive por cima do "Já voltamos!") enquanto estiver ligado.
+
+- **Ligar e desligar com a live no ar:** quadro **📌 Banner "SIGA O PERFIL"** no painel (embaixo do contador e do
+  card, no lado TikTok → Shopee) ou no cartão da Shopee no celular. Aperte **📌 Mostrar banner** para pôr; o mesmo
+  botão vira **■ Tirar banner**. Muda na hora, sem parar a live, e a escolha fica guardada para a próxima live.
+- A imagem é `imagens\siga_o_perfil.png` (fundo transparente). Para trocar o desenho, troque o arquivo.
+- Posição: o botão + Seguir anda para a direita quando o nome da loja é mais comprido. O padrão foi medido para o
+  nome da loja do dono, já descontando o corte das laterais que o celular faz. Para outra loja, ajuste no
+  `config.json`: `"banner_siga_x"` (onde começa a seta, de 0 a 1, padrão 0.53), `"banner_siga_y"` (altura do
+  centro, padrão 0.11, na linha do nome do perfil) e `"banner_siga_larg"` (largura, padrão 0.35).
+- Para desenhar o banner, o vídeo é sempre refeito, mesmo no modo "copiar".
 
 ## Controlar pelo celular (só no Wi-Fi de casa)
 
